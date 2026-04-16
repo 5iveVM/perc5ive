@@ -18,7 +18,7 @@ Submitted to **Colosseum Frontier 2026**.
 | `bench/` — PercolatorBench conformance harness | crate scaffold, 11 tests | 11 |
 | `mcp/` — MCP-Perc5ive tool catalogue | 19 tool schemas, transport pending | 4 |
 
-**141 tests green across 3 crates.** See `docs-internal/SESSION_STATE.md` for the full change log (private — contains planning notes).
+**141 tests green across 3 crates.**
 
 ## Why
 
@@ -65,8 +65,7 @@ perc5ive/
 ├── TOLY_CORPUS.md         # Canonical Anatoly quotes backing the thesis
 ├── MULTIPRECISION_DSL_DECISION.md  # Why Path 3 (hand-written bytecode)
 ├── MCP_PERCOLATOR.md      # MCP server spec
-├── PERCOLATOR_BENCH.md    # Conformance suite spec
-└── docs-internal/         # Strategy, session logs, competitive analysis (gitignored)
+└── PERCOLATOR_BENCH.md    # Conformance suite spec
 ```
 
 ## Build
