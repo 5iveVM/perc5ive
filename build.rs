@@ -7,15 +7,12 @@ use five_dsl_compiler::DslCompiler;
 ///
 /// `required = true` means a compile failure halts the build. `false` means
 /// we emit a cargo warning and continue so the rest of the crate still
-/// builds (useful for known-blocked files — today: `markets/lp_perp` pending
-/// DSL i128 literal support, see
-/// https://github.com/5iveVM/five-dsl-compiler/issues for the tracking
-/// ticket).
+/// builds.
 const DSL_SOURCES: &[(&str, &str, bool)] = &[
     ("dsl/src/main.v", "target/perc5ive.fbin", true),
     ("markets/sov/src/main.v", "target/sov.fbin", true),
     ("markets/pyth_race/src/main.v", "target/pyth_race.fbin", true),
-    ("markets/lp_perp/src/main.v", "target/lp_perp.fbin", false),
+    ("markets/lp_perp/src/main.v", "target/lp_perp.fbin", true),
 ];
 
 fn main() {
