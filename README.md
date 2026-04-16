@@ -13,12 +13,14 @@ Submitted to **Colosseum Frontier 2026**.
 | `src/bytecode/link.rs` — linker | sentinel-rewrite pipeline | 6 e2e |
 | `src/bytecode/dsl_header.rs` — header normalizer | DSL→VM header conversion | 8 e2e |
 | `tests/e2e_integration.rs` — VM × AccountInfo | full pipeline with real pinocchio AccountInfo shim | 9 e2e |
+| `tests/e2e_full_link.rs` — compiled main.v × all 9 handler bodies | build.rs output linked end-to-end | 4 e2e |
+| `build.rs` — DSL build step | compiles `dsl/src/main.v` → `target/perc5ive.fbin` on every build | — |
 | `dsl/src/main.v` — Percolator in 5ive DSL | signatures + sentinel stubs | — |
 | `markets/{sov,pyth_race,lp_perp}/src/main.v` | 3 thin DSL wrappers | — |
 | `bench/` — PercolatorBench conformance harness | crate scaffold, 11 tests | 11 |
 | `mcp/` — MCP-Perc5ive tool catalogue | 19 tool schemas, transport pending | 4 |
 
-**141 tests green across 3 crates.**
+**145 tests green across 3 crates.**
 
 ## Why
 
@@ -43,13 +45,15 @@ perc5ive/
 │   ├── u256.rs            # Rust refs + bytecode programs for u256 ops
 │   ├── i256.rs            # Signed 256-bit ops
 │   └── i128.rs            # BPF-safe i128 wrapper
+├── build.rs               # Compiles dsl/src/main.v → target/perc5ive.fbin
 ├── tests/
 │   ├── e2e_u256.rs        # Multiprecision VM conformance
 │   ├── e2e_i256.rs        # Signed 256-bit
 │   ├── e2e_i128.rs        # i128
 │   ├── e2e_link.rs        # Linker append + rewrite
 │   ├── e2e_real_dsl.rs    # DSL-compiled binary round-trip
-│   ├── e2e_integration.rs # VM × AccountInfo × handlers
+│   ├── e2e_integration.rs # VM × AccountInfo × handlers (hand-written bytecode)
+│   ├── e2e_full_link.rs   # Compiled main.v × all 9 sentinels linked end-to-end
 │   └── common/mod.rs      # pinocchio 0.9.2 AccountInfo shim
 ├── dsl/src/main.v         # Percolator in 5ive DSL (sentinel-stubbed)
 ├── markets/
@@ -71,10 +75,24 @@ perc5ive/
 ## Build
 
 ```
-cargo test                           # run all perc5ive tests
+cargo test                           # run all perc5ive tests (regenerates .fbin via build.rs)
 cd bench && cargo test               # run PercolatorBench
 cd mcp && cargo test                 # run MCP tool-schema tests
 ```
+
+### Local dependencies
+
+Perc5ive uses path dependencies on three sibling 5ive repos. Check them out alongside this directory:
+
+```
+5iveVM/
+├── perc5ive/              # this repo
+├── five-protocol/         # runtime dep — VM types and opcodes
+├── five-vm-mito/          # runtime dep — MitoVM interpreter
+└── five-dsl-compiler/     # build-time dep — compiles dsl/src/main.v
+```
+
+Clone each from `https://github.com/5iveVM/<name>.git`. The compiler is pinned against `main` at HEAD `3d92ade` — bumping that pin in `Cargo.toml` is how we pull in new compiler work.
 
 The `hello_slab/percolator/` directory is a local clone of `aeyakovenko/percolator` used as a conformance oracle. It's gitignored; clone it separately:
 
