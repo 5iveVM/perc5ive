@@ -38,6 +38,33 @@
 //! no trailing HALT). Pass them to [`Linker::append_function`]; then call
 //! [`Linker::rewrite_stub`] with the matching sentinel from
 //! [`SENTINELS`] to wire the DSL stub to the appended body.
+//!
+//! # Upstream conformance — Anatoly's b78a9d3 tightening
+//!
+//! Anatoly shipped a series of correctness fixes to `hello_slab/percolator`
+//! between `719c408..b78a9d3` (2026-04-15 → 2026-04-16, see
+//! `git log --oneline 719c408..b78a9d3` in the gitignored upstream clone).
+//! All seven commits tighten error propagation rather than changing
+//! topology, so they fold into perc5ive incrementally rather than as a
+//! single big rebase. The full audit:
+//!
+//! | Upstream commit | Tightening | Affects perc5ive handler(s) |
+//! |---|---|---|
+//! | `788ddf8` | `set_position_basis_q` / `attach_effective_position` / `append_or_route_new_reserve` → `Result<()>`; checked_sub + ok_or(CorruptState) | `execute_trade`, `settle_account`, `liquidate_at_oracle` |
+//! | `305ce28` | `set_capital` / `fee_debt_sweep` / `inc_phantom_dust_bound` → `Result<()>`; vault subtraction uses checked_sub | `withdraw`, `top_up_insurance_fund`, `convert_released_pnl` |
+//! | `57b5c00` | `validate_reserve_shape()` invariant; `?` propagation in `settle_side_effects_with_h_lock` and `withdraw_not_atomic`; checked_add replaces add_u128 in `deposit_not_atomic` / `finalize_touched` / `convert_released_pnl` | `deposit`, `convert_released_pnl`, `settle_account` |
+//! | `28a161c` | tightens `validate_reserve_shape` — remaining+release ≤ anchor, pending_horizon > 0 when present, r==0 fast path validates | `settle_account` (post-Phase-3) |
+//! | `512252d` | rejects zero-sized present buckets in `validate_reserve_shape` | `settle_account` (post-Phase-3) |
+//! | `63abb5f` | R_i entry invariant in `set_pnl_with_reserve`; bankruptcy uses NoPositiveIncreaseAllowed; insurance balance addition uses checked_add; reclaim's `fee_credits > 0` becomes CorruptState | `liquidate_at_oracle`, `top_up_insurance_fund`, `close_account` |
+//! | `b78a9d3` | proofs_audit update for `garbage_collect_dust → Result<u32>` | tests only — no handler change |
+//!
+//! Every `ADD` / `SUB` opcode emitted in this file today wraps on overflow;
+//! upstream now `?`-propagates `Overflow` everywhere. Closing this gap means
+//! either (a) emitting a CMP+JUMP_IF guard around each arithmetic op so the
+//! handler returns a non-zero status code on overflow, or (b) waiting on
+//! checked-arithmetic opcodes from the VM side. Tracked as Phase 3 work in
+//! the next-session plan; the comments on each handler below name the
+//! specific upstream invariant that body still owes.
 
 use super::emit::Program;
 use five_protocol::opcodes::{ADD, RETURN_VALUE, SUB};
