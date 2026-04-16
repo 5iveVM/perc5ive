@@ -1,0 +1,18 @@
+[package]
+name = "perc5ive-bench"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "PercolatorBench — conformance + adversarial test suite for Percolator-compatible implementations"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+percolator = { path = "../hello_slab/percolator" }
+perc5ive = { path = ".." }
+five-protocol = { path = "../../five-protocol" }
+five-vm-mito = { path = "../../five-vm-mito" }
+
+[dev-dependencies]
+pinocchio = "=0.9.2"

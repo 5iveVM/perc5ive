@@ -1,0 +1,19 @@
+[package]
+name = "perc5ive"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Percolator risk engine ported to 5ive DSL + hand-written bytecode for u256 hotspots"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+five-protocol = { path = "../five-protocol" }
+five-vm-mito = { path = "../five-vm-mito" }
+
+[dev-dependencies]
+# Version-pinned to match five-vm-mito's dep so the test account-info shim
+# (tests/common/mod.rs) mirrors the exact internal Account layout. Bump in
+# lockstep with mito.
+pinocchio = "=0.9.2"

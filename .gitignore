@@ -1,0 +1,34 @@
+# Internal-only documentation: strategy, session logs, competitive landscape,
+# fundraising notes, outreach playbooks. Never publish.
+docs-internal/
+
+# Rust build artifacts
+/target/
+**/target/
+Cargo.lock.bak
+
+# Anatoly's upstream — cloned locally as a conformance oracle. Contributors
+# should clone it themselves so we're not redistributing someone else's
+# repo tree in ours.
+/hello_slab/
+
+# Claude Code session state and local settings
+.claude/
+claude-session.jsonl
+.claude-session.jsonl*
+.claude-code/
+
+# Editor scratch
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Five DSL compiler outputs that belong in fresh builds, not commits
+dsl/probe.fbin
+dsl/target/
+target/*.fbin

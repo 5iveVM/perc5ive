@@ -1,0 +1,56 @@
+{
+  "bytecode": "NUlWRToDkAAVAAeQACEAB5AALQAHG4H4+tfs2f72/gEHG4L4+tfs2f72/gEHG4P4+tfs2f72/gEHAA==",
+  "abi": {
+    "functions": {
+      "do_add": {
+        "index": 1,
+        "parameters": [
+          {
+            "name": "s",
+            "type": "State"
+          }
+        ],
+        "accounts": []
+      },
+      "sentinel_cmp": {
+        "index": 3,
+        "parameters": [],
+        "accounts": []
+      },
+      "do_cmp": {
+        "index": 0,
+        "parameters": [
+          {
+            "name": "s",
+            "type": "State"
+          }
+        ],
+        "accounts": []
+      },
+      "do_sub": {
+        "index": 2,
+        "parameters": [
+          {
+            "name": "s",
+            "type": "State"
+          }
+        ],
+        "accounts": []
+      },
+      "sentinel_add": {
+        "index": 4,
+        "parameters": [],
+        "accounts": []
+      },
+      "sentinel_sub": {
+        "index": 5,
+        "parameters": [],
+        "accounts": []
+      }
+    },
+    "fields": [],
+    "version": "1.0"
+  },
+  "disassembly": [],
+  "version": "1.0"
+}

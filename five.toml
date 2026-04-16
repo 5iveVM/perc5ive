@@ -1,0 +1,29 @@
+schema_version = 1
+
+[modules]
+main = ["dsl/src/main.v"]
+
+[project]
+name = "perc5ive"
+version = "0.1.0"
+description = "Percolator risk engine ported to 5ive DSL (+ hand-written bytecode for u256 hotspots)"
+source_dir = "dsl/src"
+build_dir = "build"
+target = "vm"
+entry_point = "dsl/src/main.v"
+
+[optimizations]
+enable_compression = true
+enable_constraint_optimization = true
+optimization_level = "production"
+
+[dependencies]
+std = { package = "@5ive/std", version = "0.1.0", source = "bundled", link = "inline" }
+
+[build]
+output_artifact_name = "perc5ive"
+max_bytecode_size = 1048576
+target_compute_units = 200000
+
+[deploy]
+cluster = "devnet"
