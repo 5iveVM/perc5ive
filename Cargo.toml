@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "Percolator risk engine ported to 5ive DSL + hand-written bytecode for u256 hotspots"
+build = "build.rs"
 
 [lib]
 path = "src/lib.rs"
@@ -11,6 +12,14 @@ path = "src/lib.rs"
 [dependencies]
 five-protocol = { path = "../five-protocol" }
 five-vm-mito = { path = "../five-vm-mito" }
+
+[build-dependencies]
+# Compiles dsl/src/main.v → target/perc5ive.fbin at build time. Source HEAD
+# (currently 3d92ade on main) includes the u128-rvalue fix that the published
+# @five-vm/cli WASM does not. Path dep matches the existing five-protocol /
+# five-vm-mito convention; swap to git or published when the compiler crate
+# is restructured to resolve its own deps without sibling checkouts.
+five-dsl-compiler = { path = "../five-dsl-compiler" }
 
 [dev-dependencies]
 # Version-pinned to match five-vm-mito's dep so the test account-info shim

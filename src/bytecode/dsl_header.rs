@@ -344,11 +344,16 @@ mod tests {
             Err(_) => return, // skip if not compiled
         };
         let out = normalize_dsl_header(&bin).expect("real main.v normalizes");
-        // Body grew by +4 (new header is 10 bytes vs 6).
-        assert_eq!(out.len(), bin.len() + 4);
         assert_eq!(&out[..4], b"5IVE");
-        // Function count survives.
-        assert_eq!(out[8], bin[5]);
-        assert_eq!(out[9], bin[5]);
+        if is_dsl_format(&bin) {
+            // Legacy 6-byte header: body shifts by +4.
+            assert_eq!(out.len(), bin.len() + 4);
+            assert_eq!(out[8], bin[5]);
+            assert_eq!(out[9], bin[5]);
+        } else {
+            // New compiler (source HEAD) emits VM-native 10-byte headers
+            // already; normalize should be a verbatim pass-through.
+            assert_eq!(out, bin);
+        }
     }
 }
