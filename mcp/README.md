@@ -77,7 +77,34 @@ The point is that the judge never has to leave their conversation with the assis
 
 ## Implementation status
 
-* **MCP infrastructure**: reuses 5ive's `five-mcp/` — no new transport work needed.
-* **Tool registrations**: the catalogue above is the spec; wiring is ~3 days of work once we have a deployed Perc5ive on devnet.
-* **Simulation backend**: `simulate_*` tools run the Rust reference from `hello_slab/percolator` — zero on-chain cost, fully deterministic.
-* **Deploy tools**: `deploy_*` tools wrap `five-cli`'s existing deploy flow; credentials are devnet-only and gated by the MCP server's auth config.
+* **MCP infrastructure**: hand-rolled stdio JSON-RPC 2.0 server in `src/bin/server.rs` (~200 LOC, no SDK dep). `initialize`, `tools/list`, `tools/call` all live.
+* **Tool registrations**: full 19-tool catalogue surfaces via `tools/list`.
+* **Wired handlers**: `list_perc5ive_markets` returns the four live devnet program IDs (perc5ive engine + sov + pyth_race + lp_perp; see `../DEVNET.md`). The other 18 tools respond with a structured "schema exposed but handler pending" envelope so MCP clients see the surface area today.
+* **Simulation backend**: `simulate_*` tools will run the Rust reference from `hello_slab/percolator` — zero on-chain cost, fully deterministic. Pending wire-up.
+* **Deploy tools**: `deploy_*` tools will wrap `scripts/deploy.sh` + `five execute`; credentials are devnet-only and gated by a session-level auth token. Pending wire-up.
+
+## Running it
+
+```
+cargo build -p mcp-perc5ive --release
+./target/release/mcp-perc5ive
+```
+
+Smoke test (stdin → stdout):
+
+```
+(echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'; \
+ echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_perc5ive_markets","arguments":{"network":"devnet"}}}') \
+| ./target/release/mcp-perc5ive
+```
+
+To wire it into Claude Code, add to `~/.claude/mcp_servers.json`:
+
+```json
+{
+  "perc5ive": {
+    "command": "/absolute/path/to/perc5ive/mcp/target/release/mcp-perc5ive",
+    "args": []
+  }
+}
+```
