@@ -216,6 +216,14 @@ impl Program {
         self
     }
 
+    /// `MULDIV_REM_U256 flags_u8` — pops three u256s (a, b, c with c on top),
+    /// pushes quotient (4 limbs), then remainder (4 limbs). Checked mode appends
+    /// an overflow bool. Paired opcode in five-vm-mito's multiprecision handler.
+    pub fn emit_muldiv_rem_u256(&mut self, flags: u8) -> &mut Self {
+        self.body.extend_from_slice(&[MULDIV_REM_U256, flags]);
+        self
+    }
+
     // ------------------------------------------------------------------------
     // Control flow — JUMP, JUMP_IF, JUMP_IF_NOT
     //
@@ -334,6 +342,75 @@ impl Program {
     pub fn body_len(&self) -> usize {
         self.body.len()
     }
+
+    // ------------------------------------------------------------------------
+    // Appended-body flavour — jumps that stay correct after the linker
+    // places the body at an arbitrary append offset.
+    //
+    // `emit_jump_*_placeholder` + `patch_jump_to_here` assume the body lives at
+    // offset 10 (i.e. it's the base binary's own body, running right after the
+    // 10-byte header). Handler bodies built by `bytecode::handlers` are
+    // appended to an already-linked binary at some offset X, so their internal
+    // JUMP targets need X added post-append.
+    //
+    // `emit_jump_*_placeholder_body_relative` tag their patch offsets so the
+    // linker can fix them up at append time. The jump target is stored
+    // *relative to the start of the body* during emit; the linker rewrites it
+    // to `body_start_in_linked_binary + relative_target` during append.
+    // ------------------------------------------------------------------------
+
+    /// Emit `JUMP_IF target_u16` with a body-relative target. Pair with
+    /// [`Program::patch_jump_to_here_body_relative`]; the returned
+    /// [`BodyRelativeJumpPatch`] carries enough context for the linker to fix
+    /// the target during `append_function_with_body_relative_jumps`.
+    pub fn emit_jump_if_placeholder_body_relative(&mut self) -> BodyRelativeJumpPatch {
+        self.body.push(JUMP_IF);
+        let patch_at = self.body.len();
+        self.body.extend_from_slice(&[0, 0]);
+        BodyRelativeJumpPatch { patch_at }
+    }
+
+    /// Emit `JUMP_IF_NOT target_u16` with a body-relative target.
+    pub fn emit_jump_if_not_placeholder_body_relative(&mut self) -> BodyRelativeJumpPatch {
+        self.body.push(JUMP_IF_NOT);
+        let patch_at = self.body.len();
+        self.body.extend_from_slice(&[0, 0]);
+        BodyRelativeJumpPatch { patch_at }
+    }
+
+    /// Emit unconditional `JUMP target_u16` with a body-relative target.
+    pub fn emit_jump_placeholder_body_relative(&mut self) -> BodyRelativeJumpPatch {
+        self.body.push(JUMP);
+        let patch_at = self.body.len();
+        self.body.extend_from_slice(&[0, 0]);
+        BodyRelativeJumpPatch { patch_at }
+    }
+
+    /// Patch a body-relative jump to land at the current emit position. The
+    /// stored value is the *body-relative* offset (not absolute); the linker
+    /// adds the final body-start offset when it appends the body.
+    pub fn patch_jump_to_here_body_relative(&mut self, patch: BodyRelativeJumpPatch) {
+        let relative = u16::try_from(self.body.len()).expect("body too large for u16 jump");
+        let bytes = relative.to_le_bytes();
+        self.body[patch.patch_at] = bytes[0];
+        self.body[patch.patch_at + 1] = bytes[1];
+    }
+
+    /// Consume the program and return `(body, jump_patch_offsets)` — the body
+    /// bytes plus the byte offsets (within the body) of every body-relative
+    /// jump's 2-byte LE target operand. Feed this to
+    /// [`crate::bytecode::link::Linker::append_function_with_body_relative_jumps`].
+    pub fn into_body_with_jumps(self, patches: &[BodyRelativeJumpPatch]) -> (Vec<u8>, Vec<usize>) {
+        let offsets = patches.iter().map(|p| p.patch_at).collect();
+        (self.body, offsets)
+    }
+}
+
+/// Handle for a body-relative jump — paired with
+/// [`Program::patch_jump_to_here_body_relative`] and fixed up at link time.
+#[derive(Debug, Clone, Copy)]
+pub struct BodyRelativeJumpPatch {
+    pub(crate) patch_at: usize,
 }
 
 /// Write a u64 in VLE (LEB128) encoding: 7 bits per byte, continuation bit in MSB.

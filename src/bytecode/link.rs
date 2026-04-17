@@ -74,6 +74,33 @@ impl Linker {
         AppendedFn { offset }
     }
 
+    /// Append a body that contains body-relative jumps (see
+    /// [`crate::bytecode::emit::Program::emit_jump_placeholder_body_relative`]).
+    /// Each offset in `jump_patch_offsets_in_body` points at a 2-byte LE target
+    /// inside `body`; the linker rewrites each to `append_offset + stored_u16`
+    /// so the jump lands at the correct absolute IP.
+    pub fn append_function_with_body_relative_jumps(
+        &mut self,
+        body: &[u8],
+        jump_patch_offsets_in_body: &[usize],
+    ) -> AppendedFn {
+        let append_offset = u16::try_from(self.binary.len())
+            .expect("linker: binary too large for a u16 absolute CALL target");
+        let body_start = self.binary.len();
+        self.binary.extend_from_slice(body);
+        for &rel in jump_patch_offsets_in_body {
+            let abs_at = body_start + rel;
+            let stored = u16::from_le_bytes([self.binary[abs_at], self.binary[abs_at + 1]]);
+            let final_target = append_offset
+                .checked_add(stored)
+                .expect("linker: body-relative jump target overflows u16");
+            let bytes = final_target.to_le_bytes();
+            self.binary[abs_at] = bytes[0];
+            self.binary[abs_at + 1] = bytes[1];
+        }
+        AppendedFn { offset: append_offset }
+    }
+
     /// Patch a CALL site in the base binary whose absolute offset (the `CALL`
     /// opcode byte itself) is known, redirecting it to an appended function.
     ///
