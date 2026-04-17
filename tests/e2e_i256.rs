@@ -12,9 +12,11 @@ use perc5ive::bytecode::i256::{
     program_checked_neg_i256_return_limb, program_checked_neg_i256_return_overflow,
     program_div_i256_return_limb, program_is_zero_i256,
     program_mul_i256_checked_return_overflow, program_mul_i256_return_limb,
-    program_saturating_add_i256_const_rhs_return_limb, program_sub_i256_checked_return_overflow,
-    program_sub_i256_return_limb, saturating_add_i256_reference, signum_i256_reference,
-    try_into_i128_reference, wide_signed_mul_div_floor_reference, I256_MAX_RAW, I256_MIN_RAW,
+    program_saturating_add_i256_const_rhs_return_limb,
+    program_saturating_add_i256_runtime_return_limb, program_sub_i256_checked_return_overflow,
+    program_sub_i256_return_limb, program_wide_signed_mul_div_floor_return_limb,
+    saturating_add_i256_reference, signum_i256_reference, try_into_i128_reference,
+    wide_signed_mul_div_floor_reference, I256_MAX_RAW, I256_MIN_RAW,
 };
 
 fn run_u64(bytecode: Vec<u8>) -> u64 {
@@ -584,4 +586,191 @@ fn checked_mul_i256_max_times_minus_one_matches_neg_max() {
         checked_mul_i256_reference(I256_MAX_RAW, minus_one),
         Some(expected)
     );
+}
+
+// =============================================================================
+// wide_signed_mul_div_floor — bytecode form (uses MULDIV_REM_U256 @ 0xCE)
+// =============================================================================
+
+fn run_wide_mul_div_floor(basis: [u64; 4], k: [u64; 4], denom: [u64; 4]) -> [u64; 4] {
+    let mut out = [0u64; 4];
+    for limb in 0..4u8 {
+        out[limb as usize] = run_u64(program_wide_signed_mul_div_floor_return_limb(
+            basis, k, denom, limb,
+        ));
+    }
+    out
+}
+
+#[test]
+fn wide_mul_div_floor_zero_k_returns_zero() {
+    let basis = [1_000_000u64, 0, 0, 0];
+    let denom = [7u64, 0, 0, 0];
+    let result = run_wide_mul_div_floor(basis, [0; 4], denom);
+    assert_eq!(result, [0; 4]);
+}
+
+#[test]
+fn wide_mul_div_floor_zero_basis_returns_zero() {
+    let k = [42u64, 0, 0, 0];
+    let denom = [3u64, 0, 0, 0];
+    let result = run_wide_mul_div_floor([0; 4], k, denom);
+    assert_eq!(result, [0; 4]);
+}
+
+#[test]
+fn wide_mul_div_floor_positive_exact_matches_reference() {
+    // 100 * 12 / 4 = 300 exactly
+    let basis = [100u64, 0, 0, 0];
+    let k = [12u64, 0, 0, 0];
+    let denom = [4u64, 0, 0, 0];
+    let vm = run_wide_mul_div_floor(basis, k, denom);
+    let expected = wide_signed_mul_div_floor_reference(basis, k, denom);
+    assert_eq!(vm, expected);
+    assert_eq!(vm, [300, 0, 0, 0]);
+}
+
+#[test]
+fn wide_mul_div_floor_positive_truncates_toward_zero() {
+    // 17 * 11 / 10 = 187 / 10 = 18 rem 7 ⇒ positive floor is 18 (truncation).
+    let basis = [17u64, 0, 0, 0];
+    let k = [11u64, 0, 0, 0];
+    let denom = [10u64, 0, 0, 0];
+    let vm = run_wide_mul_div_floor(basis, k, denom);
+    let expected = wide_signed_mul_div_floor_reference(basis, k, denom);
+    assert_eq!(vm, expected);
+    assert_eq!(vm, [18, 0, 0, 0]);
+}
+
+#[test]
+fn wide_mul_div_floor_negative_exact_divides_just_negates() {
+    // 100 * -12 / 4 = -300 exactly; remainder is 0, so no floor bump.
+    let basis = [100u64, 0, 0, 0];
+    let k = negate([12, 0, 0, 0]);
+    let denom = [4u64, 0, 0, 0];
+    let vm = run_wide_mul_div_floor(basis, k, denom);
+    let expected = wide_signed_mul_div_floor_reference(basis, k, denom);
+    assert_eq!(vm, expected);
+    assert_eq!(vm, negate([300, 0, 0, 0]));
+}
+
+#[test]
+fn wide_mul_div_floor_negative_inexact_floors_toward_neg_infinity() {
+    // 17 * -11 / 10 = -187 / 10.  Truncation → -18; floor → -19 (one lower).
+    // The VM must pick floor, so the remainder-bump branch of the bytecode
+    // fires and adds 1 to q before negating.
+    let basis = [17u64, 0, 0, 0];
+    let k = negate([11, 0, 0, 0]);
+    let denom = [10u64, 0, 0, 0];
+    let vm = run_wide_mul_div_floor(basis, k, denom);
+    let expected = wide_signed_mul_div_floor_reference(basis, k, denom);
+    assert_eq!(vm, expected);
+    assert_eq!(vm, negate([19, 0, 0, 0]));
+}
+
+#[test]
+fn wide_mul_div_floor_wide_product_exceeds_u256() {
+    // abs_basis = 2^192; k = 2^192 (positive). Product is 2^384 (overflows u256
+    // but fits in the 512-bit intermediate). Divide by 2^200 ⇒ 2^184, a result
+    // that does fit in U256. Exercises the 512-bit path MULDIV_REM_U256 opens up.
+    let basis = [0u64, 0, 0, 1]; // 2^192
+    let k = [0u64, 0, 0, 1]; // 2^192
+    let denom = [0u64, 0, 0, 1 << 8]; // 2^200
+    let vm = run_wide_mul_div_floor(basis, k, denom);
+    let expected = wide_signed_mul_div_floor_reference(basis, k, denom);
+    assert_eq!(vm, expected);
+    // 2^384 / 2^200 = 2^184. 184 = 128 + 56, so limb 2 has (1 << 56).
+    assert_eq!(vm[0], 0);
+    assert_eq!(vm[1], 0);
+    assert_eq!(vm[2], 1u64 << 56);
+    assert_eq!(vm[3], 0);
+}
+
+#[test]
+fn wide_mul_div_floor_cross_limb_positive_matches_reference() {
+    let basis = [u64::MAX, 7, 0, 0];
+    let k = [13u64, 0, 0, 0];
+    let denom = [100u64, 0, 0, 0];
+    let vm = run_wide_mul_div_floor(basis, k, denom);
+    let expected = wide_signed_mul_div_floor_reference(basis, k, denom);
+    assert_eq!(vm, expected);
+}
+
+#[test]
+fn wide_mul_div_floor_cross_limb_negative_matches_reference() {
+    let basis = [u64::MAX, 7, 0, 0];
+    let k = negate([13, 0, 0, 0]);
+    let denom = [100u64, 0, 0, 0];
+    let vm = run_wide_mul_div_floor(basis, k, denom);
+    let expected = wide_signed_mul_div_floor_reference(basis, k, denom);
+    assert_eq!(vm, expected);
+}
+
+// =============================================================================
+// saturating_add_i256 — runtime-rhs form (b's sign resolved from locals)
+// =============================================================================
+
+fn run_sat_add_runtime(a: [u64; 4], b: [u64; 4]) -> [u64; 4] {
+    let mut out = [0u64; 4];
+    for limb in 0..4u8 {
+        out[limb as usize] = run_u64(program_saturating_add_i256_runtime_return_limb(
+            a, b, limb,
+        ));
+    }
+    out
+}
+
+#[test]
+fn saturating_add_runtime_small_positive_matches_add() {
+    let a = [5u64, 0, 0, 0];
+    let b = [7u64, 0, 0, 0];
+    assert_eq!(run_sat_add_runtime(a, b), [12, 0, 0, 0]);
+}
+
+#[test]
+fn saturating_add_runtime_small_negative_matches_add() {
+    // 5 + (-3) = 2 (no overflow, no saturation)
+    let a = [5u64, 0, 0, 0];
+    let b = negate([3, 0, 0, 0]);
+    assert_eq!(run_sat_add_runtime(a, b), [2, 0, 0, 0]);
+}
+
+#[test]
+fn saturating_add_runtime_positive_overflow_clamps_to_max() {
+    // MAX + 1 would overflow positively — expect MAX.
+    let a = I256_MAX_RAW;
+    let b = [1u64, 0, 0, 0];
+    let expected = saturating_add_i256_reference(a, b);
+    assert_eq!(expected, I256_MAX_RAW);
+    assert_eq!(run_sat_add_runtime(a, b), I256_MAX_RAW);
+}
+
+#[test]
+fn saturating_add_runtime_negative_overflow_clamps_to_min() {
+    // MIN + (-1) would overflow negatively — expect MIN.
+    let a = I256_MIN_RAW;
+    let b = negate([1, 0, 0, 0]);
+    let expected = saturating_add_i256_reference(a, b);
+    assert_eq!(expected, I256_MIN_RAW);
+    assert_eq!(run_sat_add_runtime(a, b), I256_MIN_RAW);
+}
+
+#[test]
+fn saturating_add_runtime_matches_reference_across_probes() {
+    // Sweep a mix of positive, negative, overflow, underflow. Each case's
+    // expected result is fetched from the Rust reference; the bytecode must
+    // match every case without baking sign info at emit time.
+    let probes: &[([u64; 4], [u64; 4])] = &[
+        (I256_MAX_RAW, [1, 0, 0, 0]),
+        (I256_MAX_RAW, negate([5, 0, 0, 0])),
+        (I256_MIN_RAW, negate([1, 0, 0, 0])),
+        (I256_MIN_RAW, [5, 0, 0, 0]),
+        ([100, 0, 0, 0], [200, 0, 0, 0]),
+        (negate([100, 0, 0, 0]), [200, 0, 0, 0]),
+        ([u64::MAX, 0, 0, 0], [1, 0, 0, 0]),
+    ];
+    for &(a, b) in probes {
+        let expected = saturating_add_i256_reference(a, b);
+        assert_eq!(run_sat_add_runtime(a, b), expected, "a={:?} b={:?}", a, b);
+    }
 }

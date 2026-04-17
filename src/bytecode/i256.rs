@@ -22,7 +22,7 @@ use super::emit::Program;
 use super::u256::{FLAG_CHECKED, FLAG_WRAPPING};
 use five_protocol::opcodes::{
     ADD_I256, ALLOC_LOCALS, BITWISE_AND, CMP_U256, DEALLOC_LOCALS, DIV_I256, DROP, GET_LOCAL,
-    MUL_I256, SET_LOCAL, SUB_I256, SWAP,
+    MUL_I256, SET_LOCAL, SUB, SUB_I256, SWAP,
 };
 
 /// Saturating-add I256 with the *right-hand side known at emit time*.
@@ -34,11 +34,8 @@ use five_protocol::opcodes::{
 ///
 /// Source: hello_slab/percolator/src/wide_math.rs:924-935
 ///
-/// For the runtime-rhs variant (where both operands are pushed by the caller
-/// without us knowing their signs), the bytecode needs to peek-or-recompute
-/// `b`'s sign from inside the call. That's deferred until the DSL→bytecode
-/// call convention lands; the const-rhs form is sufficient for both tests and
-/// the next port pass.
+/// For the runtime-rhs variant where both operands live on the stack when the
+/// bytecode block runs — see [`program_saturating_add_i256_runtime_return_limb`].
 pub fn program_saturating_add_i256_const_rhs_return_limb(
     a: [u64; 4],
     b: [u64; 4],
@@ -59,6 +56,59 @@ pub fn program_saturating_add_i256_const_rhs_return_limb(
     }
     p.push_u256(saturate_to);
     p.patch_jump_to_here(no_sat);
+    drop_above_limb(&mut p, limb_to_return);
+    p.finish_with_halt()
+}
+
+/// Saturating-add I256 with the right-hand side decided at runtime.
+///
+/// Same saturation rule as the const-rhs variant — clamp to `I256::MIN` when
+/// `b` is negative (so `a + b` underflowed), `I256::MAX` otherwise — but the
+/// sign of `b` is resolved at runtime from locals 0-3, so the bytecode works
+/// regardless of how the caller computed `b`. Needed for settlement paths
+/// where `b` is a K-difference delta whose sign can flip per-invocation.
+///
+/// Source: hello_slab/percolator/src/wide_math.rs:924-935
+pub fn program_saturating_add_i256_runtime_return_limb(
+    a: [u64; 4],
+    b: [u64; 4],
+    limb_to_return: u8,
+) -> Vec<u8> {
+    assert!(limb_to_return < 4);
+    let mut p = Program::new();
+    // Stash b's sign bit before the add consumes b. Locals 0-3 hold b.
+    p.raw_bytes(&[ALLOC_LOCALS, 4]);
+    p.push_u256(b);
+    for i in (0..4u8).rev() {
+        p.raw_bytes(&[SET_LOCAL, i]);
+    }
+    // Push a, restore b, then CHECKED add.
+    p.push_u256(a);
+    for i in 0..4u8 {
+        p.raw_bytes(&[GET_LOCAL, i]);
+    }
+    p.raw_bytes(&[ADD_I256, FLAG_CHECKED]);
+    // Stack top: overflow bool. If zero, fall through with the 4-limb sum.
+    let no_sat = p.emit_jump_if_not_placeholder();
+    // Overflow path: drop the 4 (now meaningless) wrapping result limbs,
+    // then push MIN or MAX depending on b's sign (peeked from local 3).
+    for _ in 0..4 {
+        p.raw(DROP);
+    }
+    // Push b's high limb ANDed with sign mask — nonzero ⇒ b was negative.
+    p.raw_bytes(&[GET_LOCAL, 3]);
+    p.push_u64(1u64 << 63);
+    p.raw(BITWISE_AND);
+    let b_positive = p.emit_jump_if_not_placeholder();
+    p.push_u256(I256_MIN_RAW);
+    let skip_max = p.emit_jump_placeholder();
+    p.patch_jump_to_here(b_positive);
+    p.push_u256(I256_MAX_RAW);
+    p.patch_jump_to_here(skip_max);
+    // Join with the no-overflow fall-through: both paths have 4 limbs on the
+    // stack ready to be narrowed.
+    p.patch_jump_to_here(no_sat);
+    p.raw(DEALLOC_LOCALS);
     drop_above_limb(&mut p, limb_to_return);
     p.finish_with_halt()
 }
@@ -581,6 +631,196 @@ fn cmp_u256_ref(a: [u64; 4], b: [u64; 4]) -> core::cmp::Ordering {
 }
 
 // =============================================================================
+// wide_signed_mul_div_floor — bytecode form (uses MULDIV_REM_U256 @ 0xCE)
+//
+// Algorithm:
+//   1. If k_diff == 0 or abs_basis == 0: return 0.
+//   2. negative = is_negative(k_diff); if negative, compute abs_k = -k_diff
+//      (spec invariant: caller must not pass I256::MIN for k_diff; this bytecode
+//      wraps MIN to MIN, matching the abs_u256 bytecode's convention).
+//   3. (q, r, _overflow) = MULDIV_REM_U256(abs_basis, abs_k, denominator).
+//   4. If !negative: return q.
+//   5. If r == 0: return -q.  Else: return -(q + 1).
+//
+// The previous version of this function was a pure-Rust reference because no
+// opcode surfaced the remainder. MULDIV_REM_U256 eliminates that detour — the
+// sign-adjust branch now sees (q, r) directly on the stack.
+//
+// Bytecode is parametrised exactly like `program_abs_i256_return_limb`: it
+// bakes all three u256 operands in at emit time and returns a single result
+// limb. Callers fold over limb_to_return ∈ {0, 1, 2, 3} to reconstruct the
+// full I256 — the same pattern conformance tests already use for abs_i256.
+// =============================================================================
+
+/// Wide-precision signed mul-div with floor rounding toward -∞, bytecode form.
+///
+/// `limb_to_return` selects which of the 4 result limbs ends up on top of the
+/// stack (callers reassemble the full [u64; 4] by running the program four
+/// times with limb_to_return = 0, 1, 2, 3 — same convention as abs_i256).
+///
+/// Invariants matching the Rust reference (`wide_signed_mul_div_floor_reference`):
+///   * Panics at VM runtime on `denominator == 0` (via DIV-by-zero trap inside
+///     MULDIV_REM_U256's handler).
+///   * Wraps on `k_diff == I256::MIN` (the caller must guard, same as abs_i256).
+///
+/// Generated bytecode shape:
+///   ALLOC_LOCALS 4               ; stash k_diff for sign test + abs re-push
+///   push_u256 k_diff
+///   stash_top_u256_to_locals
+///   get_local 3
+///   push_u64 (1 << 63)
+///   BITWISE_AND
+///   JUMP_IF_NOT positive_branch
+///     ; negative branch: compute abs_k = 0 - k_diff
+///     push_u256 [0; 4]
+///     restore_u256_from_locals
+///     SUB_I256 wrapping
+///     JUMP to muldiv
+///   positive_branch:
+///     restore_u256_from_locals
+///   muldiv:
+///     push_u256 abs_basis
+///     SWAP chain to reorder (stack: abs_k, abs_basis -> abs_basis, abs_k)
+///     push_u256 denominator
+///     MULDIV_REM_U256 wrapping
+///     ; stack (top-down): r3, r2, r1, r0, q3, q2, q1, q0
+///   ; re-test sign via the stashed local
+///   get_local 3
+///   push_u64 (1 << 63)
+///   BITWISE_AND
+///   JUMP_IF_NOT positive_done
+///     ; negative: bump q by 1 iff r != 0, then negate
+///     ; check r == 0 via ORing the four limbs and comparing to zero
+///     DUP r3 r2 r1 r0 via locals (re-stash): we need r on both the is_zero
+///     test and the potential discard path. Simpler: stash r into locals 4-7,
+///     then for is_zero compute (r0|r1|r2|r3) via OR chain.
+pub fn program_wide_signed_mul_div_floor_return_limb(
+    abs_basis: [u64; 4],
+    k_diff: [u64; 4],
+    denominator: [u64; 4],
+    limb_to_return: u8,
+) -> Vec<u8> {
+    assert!(limb_to_return < 4);
+    let mut p = Program::new();
+
+    // Locals 0-3: k_diff limbs (for sign test + abs computation).
+    // Locals 4-7: remainder limbs (for is_zero check on the negative branch).
+    p.raw_bytes(&[ALLOC_LOCALS, 8]);
+
+    // Stash k_diff into locals 0-3.
+    p.push_u256(k_diff);
+    for i in (0..4u8).rev() {
+        p.raw_bytes(&[SET_LOCAL, i]);
+    }
+
+    // Sign test: (k_diff limb 3) & (1 << 63). Nonzero ⇒ negative.
+    p.raw_bytes(&[GET_LOCAL, 3]);
+    p.push_u64(1u64 << 63);
+    p.raw(BITWISE_AND);
+    let sign_is_positive = p.emit_jump_if_not_placeholder();
+
+    // Negative path: abs_k = 0 - k_diff (I256 two's-complement wrap).
+    p.push_u256([0; 4]);
+    for i in 0..4u8 {
+        p.raw_bytes(&[GET_LOCAL, i]);
+    }
+    p.raw_bytes(&[SUB_I256, FLAG_WRAPPING]);
+    let jump_to_muldiv = p.emit_jump_placeholder();
+
+    // Positive path: abs_k = k_diff (re-push from locals).
+    p.patch_jump_to_here(sign_is_positive);
+    for i in 0..4u8 {
+        p.raw_bytes(&[GET_LOCAL, i]);
+    }
+
+    // Join: stack top = abs_k (4 limbs). Now push abs_basis + denominator and
+    // invoke MULDIV_REM_U256. The opcode expects the stack layout (c on top):
+    //   [abs_basis_limbs][abs_k_limbs][denominator_limbs]
+    // We currently have [abs_k] on top; abs_basis needs to sit BELOW abs_k.
+    // Re-stash abs_k into locals 4-7, push abs_basis, then restore abs_k.
+    p.patch_jump_to_here(jump_to_muldiv);
+    for i in (4..8u8).rev() {
+        p.raw_bytes(&[SET_LOCAL, i]);
+    }
+    p.push_u256(abs_basis);
+    // Restore abs_k on top of abs_basis.
+    for i in 4..8u8 {
+        p.raw_bytes(&[GET_LOCAL, i]);
+    }
+    // Finally push denominator and call the opcode.
+    p.push_u256(denominator);
+    p.emit_muldiv_rem_u256(FLAG_WRAPPING);
+    // Stack post-op (top-down): r3 r2 r1 r0 q3 q2 q1 q0.
+
+    // Stash remainder into locals 4-7 (replaces abs_k — we no longer need it).
+    // Stack top is r3; SET_LOCAL pops from top, so:
+    //   SET_LOCAL 7 ← r3 ; SET_LOCAL 6 ← r2 ; SET_LOCAL 5 ← r1 ; SET_LOCAL 4 ← r0
+    for i in (4..8u8).rev() {
+        p.raw_bytes(&[SET_LOCAL, i]);
+    }
+    // Stack now (top-down): q3 q2 q1 q0 — exactly the output of !negative.
+
+    // Re-test the sign via local 3 to decide whether to negate / bump.
+    p.raw_bytes(&[GET_LOCAL, 3]);
+    p.push_u64(1u64 << 63);
+    p.raw(BITWISE_AND);
+    let final_positive = p.emit_jump_if_not_placeholder();
+
+    // Negative finalisation: compute q_final = q + (r != 0 ? 1 : 0), then negate.
+    // First need r == 0? — OR the four remainder limbs together. Any nonzero
+    // limb ⇒ non-zero remainder ⇒ bump by 1.
+    // Implementation: push q into 2nd-stash (locals 0-3 are free again; we
+    // finished with k_diff after the initial sign test). Push limbs of r,
+    // compare against [0;4] with CMP_U256 (pushes 0=lt, 1=eq, 2=gt — only 1
+    // means zero remainder).
+    for i in (0..4u8).rev() {
+        p.raw_bytes(&[SET_LOCAL, i]);
+    }
+    // Stack now empty of q; push r, push [0;4], CMP.
+    for i in 4..8u8 {
+        p.raw_bytes(&[GET_LOCAL, i]);
+    }
+    p.push_u256([0; 4]);
+    p.raw_bytes(&[CMP_U256, FLAG_WRAPPING]);
+    // CMP_U256 pushes 0/1/2 (lt/eq/gt). Since r is u256, cmp(r, 0) is always
+    // 1 (r == 0) or 2 (r > 0); lt is unreachable. We want to SKIP the bump
+    // iff r == 0, i.e. iff cmp == 1. Normalize by subtracting 1 — the result
+    // is 0 for the skip case and 1 for the bump case — then JUMP_IF_NOT to
+    // skip_bump takes the branch exactly when cmp - 1 == 0.
+    p.push_u64(1);
+    p.raw(SUB);
+    let skip_bump = p.emit_jump_if_not_placeholder();
+    // r != 0 path: bump q by adding [1,0,0,0] via ADD_U256 wrapping.
+    for i in 0..4u8 {
+        p.raw_bytes(&[GET_LOCAL, i]);
+    }
+    p.push_u256([1, 0, 0, 0]);
+    p.emit_add_u256(FLAG_WRAPPING);
+    // Re-stash the bumped q into locals 0-3.
+    for i in (0..4u8).rev() {
+        p.raw_bytes(&[SET_LOCAL, i]);
+    }
+    p.patch_jump_to_here(skip_bump);
+
+    // Negate q: push 0, restore q, SUB_I256.
+    p.push_u256([0; 4]);
+    for i in 0..4u8 {
+        p.raw_bytes(&[GET_LOCAL, i]);
+    }
+    p.raw_bytes(&[SUB_I256, FLAG_WRAPPING]);
+    let finish = p.emit_jump_placeholder();
+
+    // Positive finalisation: q is already on the stack, nothing to do.
+    p.patch_jump_to_here(final_positive);
+
+    // Join: dealloc locals, narrow to requested limb.
+    p.patch_jump_to_here(finish);
+    p.raw(DEALLOC_LOCALS);
+    drop_above_limb(&mut p, limb_to_return);
+    p.finish_with_halt()
+}
+
+// =============================================================================
 // Remaining deferred ops
 // =============================================================================
 //
@@ -589,14 +829,7 @@ fn cmp_u256_ref(a: [u64; 4], b: [u64; 4]) -> core::cmp::Ordering {
 //     The const-rhs form ships above (bakes the saturation constant at emit
 //     time). Runtime-rhs needs to peek `b`'s sign-bit without consuming it
 //     from the stack — doable with `stash_top_u256_to_locals` + test +
-//     restore, similar to `abs_i256`. Deferred because current callers in
-//     Percolator's risk engine pass one operand as a constant.
-//
-// - `wide_signed_mul_div_floor(abs_basis, k_diff, denominator) -> I256`
-//     Source: wide_math.rs:1498-1551
-//     Needs a `MULDIV_REM_U256` opcode (or two-output MULDIV) so the bytecode
-//     can see the remainder and apply floor-toward-(-∞) rounding. Rust
-//     reference above is the conformance oracle.
+//     restore, similar to `abs_i256`.
 
 // =============================================================================
 // Shared helper
