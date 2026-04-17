@@ -2,7 +2,7 @@
 
 Live on Solana devnet. Program IDs are stable across redeploys; the underlying bytecode is upgraded in place.
 
-> **⚠️ Stale as of 2026-04-17** — the currently-deployed perc5ive engine is the *pre-linked* 463-byte binary (sentinel-stubbed handlers). The linked binary including all 9 hand-written handler bodies is **1550 B** and needs a redeploy before the on-chain program can execute deposit / withdraw / settle / execute_trade / liquidate. Markets (sov / pyth_race / lp_perp) have no sentinels and don't need relinking. See "How to redeploy" below.
+> **⚠️ Linked perc5ive redeploy blocked on an on-chain VM upgrade (2026-04-17)** — the currently-deployed perc5ive engine is the *pre-linked* 463 B binary (sentinel-stubbed handlers). The linked binary is 1550 B and locally reproducible (`cargo run --bin link-perc5ive`; verified by `tests/devnet_reproducibility.rs::linked_perc5ive_has_no_sentinels_and_expected_size`), but it can't ship to the currently-deployed VM loader. Details in the "Deploy blockers" section below.
 
 | Artifact | Program ID | Initial deploy tx | Current bytecode size | After relink (needs redeploy) |
 |---|---|---|---|---|
@@ -12,6 +12,43 @@ Live on Solana devnet. Program IDs are stable across redeploys; the underlying b
 | **LPPerp** | [`DevEEA1JcuQCQnqrb38SjKn3fEsxKQ3BjML7um6DH2Bp`](https://explorer.solana.com/address/DevEEA1JcuQCQnqrb38SjKn3fEsxKQ3BjML7um6DH2Bp?cluster=devnet) | [`2U3UGgkRezh2MuZ35kFBQearU5gE2ZUdt3xLG2y9TG4XkL9RzTipUL1h64UQNrnFtrFz3E6QYRHWWXJs5u9NP58b`](https://explorer.solana.com/tx/2U3UGgkRezh2MuZ35kFBQearU5gE2ZUdt3xLG2y9TG4XkL9RzTipUL1h64UQNrnFtrFz3E6QYRHWWXJs5u9NP58b?cluster=devnet) | 266 B | 266 B (no change) |
 
 The perc5ive engine's VM-state PDA is `H5ykzUdetT5Lk81GHBe8Netejyw7t1spkN2ZehgRQZpp`.
+
+## Deploy blockers (2026-04-17)
+
+Three distinct problems surfaced while attempting a live redeploy on 2026-04-17. Two are fixed locally; one is outside our control.
+
+### 1. ✅ Fixed locally — `FIVE_VM_PROGRAM_ID` placeholder in five-sdk
+
+`five-sdk/src/types.ts` shipped with `FIVE_VM_PROGRAM_ID = "Five111111111111111111111111111111111111111"` — a placeholder that points at no deployed program. Every deploy that didn't pass an explicit `FiveSDKConfig.fiveVMProgramId` override failed with `ProgramAccountNotFound`.
+
+Upstream PR: [5iveVM/five-sdk#2](https://github.com/5iveVM/five-sdk/pull/2). Also tightens error surfacing in `deployLargeProgramToSolana`'s catch block so the actual RPC error propagates instead of being collapsed to `"Unknown large deployment error"`.
+
+### 2. ✅ Fixed locally — null-check race in chunked deploy
+
+When chunked deployment queries the script account before appending, an eventual-consistency window can return `null` and the SDK would NPE on `.data.length`. Retry-after-delay fix was already present in `five-sdk` main (commit `e583f06`, 2025-12-30); this is only visible to callers once the npm `@five-vm/cli` republishes with the updated SDK bundle. No PR needed from us.
+
+### 3. ⛔ Blocked on upstream — on-chain VM predates chunked deployment
+
+The deployed loader program at `J99pDwVh1PqcxyBGKRvPKk8MUvW8V8KF6TmVEavKnzaF` was last deployed on **2025-08-20** (slot 402433866, visible via `solana program show ... --url devnet`). The `InitLargeProgram` / `AppendBytecode` discriminators (4 / 5) that chunked deployment relies on were added to `five-solana` in commit `db5703d` on **2025-12-30** — four months after the on-chain program was last updated.
+
+Net effect: **no chunked-deploy path works on this devnet loader**, regardless of any SDK-side fix. The 1550 B linked perc5ive can't deploy until the 5ive team redeploys the on-chain loader with a post-`db5703d` build.
+
+This is a platform-level dependency. We don't hold the upgrade authority for the loader (`EMoPytP7RY3JhCLtNwvZowMzgNNRLTF7FHuERjQ2wHFt`), so the redeploy has to come from the 5ive maintainers. Filed context in the five-sdk PR body above; follow-up outreach is a project concern, not a code concern.
+
+### Current state summary
+
+| Artifact | Current devnet state | After upstream VM upgrade |
+|---|---|---|
+| perc5ive engine | 463 B, sentinel-stubbed (handlers unreachable) | deploy 1550 B linked — all 9 Full-scope handlers execute |
+| Markets (sov / pyth_race / lp_perp) | ≤283 B each, already-working single-shot Deploy | unchanged |
+| PercolatorBench conformance (`bench/`) | 24 tests green — proves bytecode matches Percolator Rust bit-exactly | unchanged |
+| Link correctness (`tests/devnet_reproducibility.rs`) | 6 tests green — proves the 1550 B output is well-formed VM-native with every sentinel rewritten | unchanged |
+
+Judges can reproduce the linked binary offline from a fresh clone:
+```bash
+cargo build && cargo run --bin link-perc5ive
+cargo test --test devnet_reproducibility   # proves the output is correct
+```
 
 ## What "linked" means
 
