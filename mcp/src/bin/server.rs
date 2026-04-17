@@ -33,9 +33,9 @@ const DEVNET_MARKETS: &[(&str, &str, &str)] = &[
     // five-solana main plus the upstream PRs that add chunked deploy +
     // u256 / i128 / i256 / MULDIV_REM_U256 / field-u128 opcodes.
     (
-        "perc5ive-engine (linked, Full scope)",
+        "perc5ive-engine (linked, Full scope, upload_complete)",
         "engine",
-        "873y96dgbUKBfRu971Vx8UTTSCVqQz1MopJfaCk18yS5",
+        "2896HM1kYbq21EHXjLXFcevL95bkZWK7jrrscPWP5gaC",
     ),
     // Markets run on the stock loader — pure DSL, no multi-precision ops,
     // no chunked deploy needed.
