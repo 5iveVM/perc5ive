@@ -29,11 +29,16 @@ const SERVER_VERSION: &str = "0.1.0";
 /// Single source of truth for now; once we add a `markets.json` registry
 /// this should pull from disk.
 const DEVNET_MARKETS: &[(&str, &str, &str)] = &[
+    // Perc5ive runs on our custom loader at CTSPYe… — built from
+    // five-solana main plus the upstream PRs that add chunked deploy +
+    // u256 / i128 / i256 / MULDIV_REM_U256 / field-u128 opcodes.
     (
-        "perc5ive-engine",
+        "perc5ive-engine (linked, Full scope)",
         "engine",
-        "2oRBYXUFxKb9AVP5aZTCoUKpgpU3318PvgM944gmh8VK",
+        "873y96dgbUKBfRu971Vx8UTTSCVqQz1MopJfaCk18yS5",
     ),
+    // Markets run on the stock loader — pure DSL, no multi-precision ops,
+    // no chunked deploy needed.
     (
         "sov-anchor",
         "sov",

@@ -31,6 +31,22 @@ fi
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
+# Custom VM loader program ID — perc5ive runs against our own loader built
+# from the latest five-solana + five-vm-mito sources (includes InitLargeProgram
+# chunked-deploy support + all new u256/i128/i256/MULDIV_REM_U256/field-u128
+# opcodes). Override by exporting PERC5IVE_VM_LOADER_ID.
+#
+# The stock loader at J99pDwVh1PqcxyBGKRvPKk8MUvW8V8KF6TmVEavKnzaF was last
+# deployed 2025-08-20 and predates every opcode perc5ive uses, so the stock
+# path doesn't work today.
+DEFAULT_LOADER_ID="CTSPYe2YTciJr2oHqGZZr6H8GnaSNCNENZdcjTM85Dq9"
+LOADER_ID="${PERC5IVE_VM_LOADER_ID:-${DEFAULT_LOADER_ID}}"
+
+# Loader selection: perc5ive needs the custom loader (multi-precision
+# opcodes + chunked deploy). Markets are pure DSL and deploy fine on the
+# stock loader — both paths coexist cleanly on devnet.
+STOCK_LOADER_ID="J99pDwVh1PqcxyBGKRvPKk8MUvW8V8KF6TmVEavKnzaF"
+
 case "${ARTIFACT}" in
     perc5ive)
         # Regenerate everything and run the linker.
@@ -42,6 +58,7 @@ case "${ARTIFACT}" in
         cargo run --quiet --bin link-perc5ive -- target/perc5ive.fbin target/perc5ive.linked.bin
         SHIPPED="${REPO_ROOT}/target/perc5ive.bin"
         cp "target/perc5ive.linked.bin" "${SHIPPED}"
+        TARGET_LOADER="${LOADER_ID}"
         ;;
     sov|pyth_race|lp_perp)
         SOURCE="${REPO_ROOT}/target/${ARTIFACT}.fbin"
@@ -51,6 +68,7 @@ case "${ARTIFACT}" in
             exit 1
         fi
         cp "${SOURCE}" "${SHIPPED}"
+        TARGET_LOADER="${STOCK_LOADER_ID}"
         ;;
     *)
         echo "unknown artifact '${ARTIFACT}' — expected perc5ive, sov, pyth_race, or lp_perp" >&2
@@ -58,5 +76,5 @@ case "${ARTIFACT}" in
         ;;
 esac
 
-echo "→ deploying ${ARTIFACT} ($(wc -c <"${SHIPPED}") bytes)"
-exec five deploy "${SHIPPED}" "$@"
+echo "→ deploying ${ARTIFACT} ($(wc -c <"${SHIPPED}") bytes) against loader ${TARGET_LOADER}"
+exec five deploy "${SHIPPED}" --program-id "${TARGET_LOADER}" "$@"
