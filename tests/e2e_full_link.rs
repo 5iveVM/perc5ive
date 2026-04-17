@@ -101,7 +101,7 @@ fn linked_main_v_is_vm_native_and_parses_via_mito() {
     // Smoke: VM accepts the layout. The Result (Ok or Err) depends on what
     // function 0 is in the compiled main.v — we deliberately do not assert
     // on its shape, only that no panic escapes the call.
-    let _ = MitoVM::execute_direct(&linked, &[], &[]);
+    let _ = MitoVM::execute_direct(&linked, &[], &[], &[0u8; 32], &mut five_vm_mito::StackStorage::new());
 }
 
 /// The linked binary grows by exactly the total size of all 9 appended

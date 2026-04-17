@@ -65,7 +65,7 @@ fn typed_u128_input_param_round_trips_through_load_param() {
     let bytecode = one_function_script_loading_param_1();
     let input = typed_input_data_u128(0, amount);
 
-    let result = MitoVM::execute_direct(&bytecode, &input, &[])
+    let result = MitoVM::execute_direct(&bytecode, &input, &[], &[0u8; 32], &mut five_vm_mito::StackStorage::new())
         .expect("VM should accept the u128 typed-param input")
         .expect("function should return a value");
 
@@ -79,7 +79,7 @@ fn typed_u128_input_param_round_trips_through_load_param() {
 fn typed_u128_zero_round_trips_cleanly() {
     let bytecode = one_function_script_loading_param_1();
     let input = typed_input_data_u128(0, 0u128);
-    let result = MitoVM::execute_direct(&bytecode, &input, &[]).unwrap().unwrap();
+    let result = MitoVM::execute_direct(&bytecode, &input, &[], &[0u8; 32], &mut five_vm_mito::StackStorage::new()).unwrap().unwrap();
     assert_eq!(result, Value::U128(0));
 }
 
@@ -87,7 +87,7 @@ fn typed_u128_zero_round_trips_cleanly() {
 fn typed_u128_max_round_trips_cleanly() {
     let bytecode = one_function_script_loading_param_1();
     let input = typed_input_data_u128(0, u128::MAX);
-    let result = MitoVM::execute_direct(&bytecode, &input, &[]).unwrap().unwrap();
+    let result = MitoVM::execute_direct(&bytecode, &input, &[], &[0u8; 32], &mut five_vm_mito::StackStorage::new()).unwrap().unwrap();
     assert_eq!(result, Value::U128(u128::MAX));
 }
 
@@ -104,7 +104,7 @@ fn typed_u128_truncated_input_data_returns_error() {
     // Only 8 bytes of "value" — should be rejected by the bounds check.
     input.extend_from_slice(&[0xAA; 8]);
 
-    let result = MitoVM::execute_direct(&bytecode, &input, &[]);
+    let result = MitoVM::execute_direct(&bytecode, &input, &[], &[0u8; 32], &mut five_vm_mito::StackStorage::new());
     assert!(
         result.is_err(),
         "truncated u128 input_data should error, got {:?}",
