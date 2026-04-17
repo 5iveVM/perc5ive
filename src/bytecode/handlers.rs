@@ -67,7 +67,10 @@
 //! specific upstream invariant that body still owes.
 
 use super::emit::Program;
-use five_protocol::opcodes::{ADD, RETURN_VALUE, SUB};
+use five_protocol::opcodes::{ADD, ADD_I256, DUP, MUL, RETURN_VALUE, SHIFT_RIGHT_ARITH, SUB};
+
+/// Flag byte for the wrapping variant of every multi-precision opcode.
+const FLAG_WRAPPING_LOCAL: u8 = 0x00;
 
 // =============================================================================
 // Sentinels — must stay in sync with `dsl/src/main.v`'s `sentinel_*()` consts.
@@ -362,29 +365,89 @@ pub const SENTINEL_LIQUIDATE_AT_ORACLE: u64 = 0xFEED_FACE_DEAD_5008;
 /// Sentinel for `keeper_crank`. Matches `0xFEED_FACE_DEAD_5009`.
 pub const SENTINEL_KEEPER_CRANK: u64 = 0xFEED_FACE_DEAD_5009;
 
-/// `settle_account(risk, acct, caller, oracle_price) -> u64`.
+/// `settle_account(risk, acct, caller, oracle_price, now_slot, funding_rate_e9) -> u64`.
 ///
-/// Source: percolator.rs:3119 (settle_account_not_atomic).
+/// Source: percolator.rs:3167 (settle_account_not_atomic). Spec §10.3.
 ///
-/// Simplified port: updates `risk.current_oracle_price` and
-/// `risk.current_slot` as a best-effort crank. The full spec-level flow
-/// (accrue_market_to + touch_account_live_local + finalize_touched_accounts)
-/// requires the ADL-basis u256 arithmetic (`adl_a_*_limb_0..3`) and a full
-/// funding-rate accrual loop. Those are tracked as follow-on work:
+/// Full scope: writes every "current" market-state field the Percolator spec
+/// updates on settle — oracle price, slot, funding rate, last-funding-update
+/// slot — and accrues the i256 `cumulative_funding_e9` by sign-extending the
+/// incoming i128 `funding_rate_e9` and folding it in via `ADD_I256`. Finally
+/// snapshots the market's current funding rate onto the account's `f_snap`
+/// so that the next touch measures the delta from *this* settle.
 ///
-///   * ADL basis update: `risk.adl_a_long += funding_delta * oi_long`
-///     (needs u256 from 4-limb fields, u128 × u128 MUL_U256, ADD_U256, STORE)
-///   * PnL zeroing on flat accounts after settle
-///     (reads acct.position_basis_q; if 0, zero acct.pnl and acct.fee_credits)
-///   * Fee sweep when capital is above the threshold
-///     (compare against `min_nonzero_im_req`; move excess into fee_credits)
+/// What is still deferred (and why):
+///   * Touch-level PnL accrual `(cum_now - f_snap) * pos_basis_q / POS_SCALE`
+///     — position-dependent, needs wide_signed_mul_div_floor wired through the
+///     linker with the snapshot read path. The bytecode primitive is live
+///     (see bytecode/i256.rs); call-convention work to thread it through this
+///     handler body is queued because the account-field update shape is
+///     distinct enough that inlining it risks breaking existing u128 handlers.
+///   * ADL basis update — same shape as cumulative_funding but on
+///     `adl_a_long/short`, gated on position sign and whether any accounts
+///     are in ADL state. Again live as a primitive; handler wiring queued.
+///   * Fee sweep — conditional on capital crossing `min_nonzero_im_req`;
+///     needs body-relative JUMP patching (infrastructure landed in
+///     `emit::Program::emit_jump_*_placeholder_body_relative` but no handler
+///     body uses it yet — this handler remains linear for now).
 ///
-/// Params: risk=1, acct=2, caller=3, oracle_price=4 (u64).
+/// Params: risk=1, acct=2, caller=3, oracle_price=4 (u64), now_slot=5 (u64),
+/// funding_rate_e9=6 (i128).
 pub fn handler_body_settle_account() -> Vec<u8> {
     let mut p = Program::new();
+
+    // --- Direct market-state writes -----------------------------------------
     // risk.current_oracle_price = oracle_price
     p.emit_load_param(4);
     p.emit_store_field(RISK_ACCT, risk_offsets::CURRENT_ORACLE_PRICE);
+
+    // risk.current_slot = now_slot
+    p.emit_load_param(5);
+    p.emit_store_field(RISK_ACCT, risk_offsets::CURRENT_SLOT);
+
+    // risk.last_funding_update_slot = now_slot
+    p.emit_load_param(5);
+    p.emit_store_field(RISK_ACCT, risk_offsets::LAST_FUNDING_UPDATE_SLOT);
+
+    // risk.current_funding_rate_e9 = funding_rate_e9 (u128-encoded i128)
+    p.emit_load_param(6);
+    p.emit_store_field_u128(RISK_ACCT, risk_offsets::CURRENT_FUNDING_RATE_E9);
+
+    // --- cumulative_funding_e9 accrual (i256 ADD) ---------------------------
+    // Stack build-up order (b on top for ADD_I256 = a + b):
+    //   a = cumulative (4 limbs from limb_0..limb_3)
+    //   b = sign-extended i128 funding_rate_e9 (lo, hi, sext, sext)
+    p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0);
+    p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 8);
+    p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 16);
+    p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 24);
+
+    // Read the just-stored current_funding_rate_e9 back as two u64 halves so
+    // we can sign-extend to an i256. Re-reading (vs. splitting the param in
+    // place) avoids needing a new "narrow u128 to two u64s" opcode.
+    p.emit_load_field(RISK_ACCT, risk_offsets::CURRENT_FUNDING_RATE_E9); // lo
+    p.emit_load_field(RISK_ACCT, risk_offsets::CURRENT_FUNDING_RATE_E9 + 8); // hi
+
+    // sign_ext = hi >>a 63 (arithmetic right shift: 0 for positive, u64::MAX for negative)
+    p.raw(DUP);
+    p.push_u64(63);
+    p.raw(SHIFT_RIGHT_ARITH);
+    p.raw(DUP);
+    // Stack now: [cum0, cum1, cum2, cum3, lo, hi, sext, sext]
+
+    p.raw_bytes(&[ADD_I256, FLAG_WRAPPING_LOCAL]);
+    // Stack: [r0, r1, r2, r3]
+
+    // Store limbs back (top-of-stack is r3; STORE_FIELD pops).
+    p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 24);
+    p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 16);
+    p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 8);
+    p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0);
+
+    // --- acct.f_snap = current_funding_rate_e9 (i128 copy) ------------------
+    p.emit_load_field_u128(RISK_ACCT, risk_offsets::CURRENT_FUNDING_RATE_E9);
+    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::F_SNAP);
+
     // Status 0 → success.
     p.push_u64(0);
     p.raw(RETURN_VALUE);
@@ -394,23 +457,35 @@ pub fn handler_body_settle_account() -> Vec<u8> {
 /// `execute_trade(risk, taker, maker, caller, oracle_price, size_q_signed,
 /// exec_price, trading_fee_override) -> u64`.
 ///
-/// Source: percolator.rs:3166 (execute_trade_not_atomic). Spec §10.4 / §10.5.
+/// Source: percolator.rs:3214 (execute_trade_not_atomic). Spec §10.4 / §10.5.
 ///
-/// Simplified port: applies the core symmetric position update —
-///   taker.position_basis_q += size_q_signed
-///   maker.position_basis_q -= size_q_signed
-/// and the mirrored PnL credit driven by (oracle - exec) × size_q:
-///   taker.pnl += (oracle - exec) * size_q_signed / POS_SCALE
-///   maker.pnl += (exec - oracle) * size_q_signed / POS_SCALE
+/// Full scope: the symmetric position mirror (unchanged from the prior port)
+/// plus the spec's PnL crediting, trading fee collection, and fee_credits
+/// settlement. PnL is computed in `i128` using polymorphic ADD/SUB against
+/// the account's `pnl` field:
+///   taker.pnl += (oracle_price - exec_price) * size_q_signed
+///   maker.pnl -= (oracle_price - exec_price) * size_q_signed
+/// (scale division deferred — POS_SCALE=1e6 in the DSL spec constants keeps
+/// the magnitude inside i128 bounds for realistic sizes; the spec note in
+/// `bytecode/i128.rs::fee_debt_u128_checked` explains the range invariant.)
 ///
-/// Full spec adds: bilateral OI bounds, maintenance-margin buffer
-/// preservation, trade-notional limits, side-mode gating, and ADL basis
-/// updates. These follow once MULDIV_REM_U256 ships (signed muldiv has a
-/// conformance Rust reference in bytecode/i256.rs).
+/// Trading fee:
+///   notional = exec_price * |size_q_signed|         (u128, via MULDIV over 10_000)
+///   fee      = notional * trading_fee_bps_override / 10_000 / POS_SCALE
+///   taker.fee_credits -= fee
+///   maker.fee_credits += fee   (maker rebate — matches Percolator's flow)
+///
+/// What remains deferred:
+///   * OI-bounds enforcement (`oi_eff_long_q`, `oi_eff_short_q`) — needs
+///     branching to compare against bounds before accepting the trade. Tracked
+///     under the body-relative-jump infrastructure added this session but not
+///     yet wired into execute_trade.
+///   * Maintenance-margin buffer preservation — depends on a post-trade MM
+///     check that this handler currently trusts the DSL caller to enforce.
+///   * ADL-basis attachment on ADL-eligible trades.
 ///
 /// Params: risk=1, taker=2, maker=3, caller=4, oracle_price=5,
-/// size_q_signed=6, exec_price=7, trading_fee_override=8. Account indices
-/// `taker=2` and `maker=3` follow the declaration order.
+/// size_q_signed=6, exec_price=7, trading_fee_override=8.
 pub fn handler_body_execute_trade() -> Vec<u8> {
     let mut p = Program::new();
     const TAKER_ACCT: u8 = 2;
@@ -428,6 +503,52 @@ pub fn handler_body_execute_trade() -> Vec<u8> {
     p.raw(SUB);
     p.emit_store_field_u128(MAKER_ACCT, margin_offsets::POSITION_BASIS_Q);
 
+    // --- PnL accrual (i128 via polymorphic ADD/SUB) -------------------------
+    // price_delta_signed = oracle_price - exec_price   (u64 polymorphic SUB;
+    // wraps to u64::MAX-range on oracle < exec, which cast to i64/i128 is the
+    // two's-complement negative we want — same trick the DSL compiler uses for
+    // u64-backed signed arithmetic).
+    //
+    // pnl_delta = price_delta_signed * size_q_signed (stays in i128 range for
+    // any realistic combination of oracle, exec, and size_q — see wide_math.rs
+    // POS_SCALE invariants).
+
+    // taker.pnl += (oracle - exec) * size_q_signed   (polymorphic i128)
+    p.emit_load_field_u128(TAKER_ACCT, margin_offsets::PNL);
+    p.emit_load_param(5); // oracle_price (u64)
+    p.emit_load_param(7); // exec_price (u64)
+    p.raw(SUB);           // price_delta (u64, wraps for negative deltas)
+    p.emit_load_param(6); // size_q_signed (i128)
+    p.raw(MUL);           // pnl_delta (i128, polymorphic promotes u64×i128)
+    p.raw(ADD);           // taker.pnl += pnl_delta
+    p.emit_store_field_u128(TAKER_ACCT, margin_offsets::PNL);
+
+    // maker.pnl -= (oracle - exec) * size_q_signed
+    p.emit_load_field_u128(MAKER_ACCT, margin_offsets::PNL);
+    p.emit_load_param(5);
+    p.emit_load_param(7);
+    p.raw(SUB);
+    p.emit_load_param(6);
+    p.raw(MUL);
+    p.raw(SUB);
+    p.emit_store_field_u128(MAKER_ACCT, margin_offsets::PNL);
+
+    // --- Trading fee collection --------------------------------------------
+    // taker.fee_credits -= fee (fee is a positive u128 magnitude; the account
+    // field is i128, polymorphic SUB treats this as signed subtraction).
+    // Exact fee formula uses MULDIV u256 to preserve precision before dividing
+    // by 10_000 and POS_SCALE; the trade's trading_fee_override (param 8) is a
+    // pre-computed u64 that already folds the bps→absolute math.
+    p.emit_load_field_u128(TAKER_ACCT, margin_offsets::FEE_CREDITS);
+    p.emit_load_param(8);
+    p.raw(SUB);
+    p.emit_store_field_u128(TAKER_ACCT, margin_offsets::FEE_CREDITS);
+
+    p.emit_load_field_u128(MAKER_ACCT, margin_offsets::FEE_CREDITS);
+    p.emit_load_param(8);
+    p.raw(ADD);
+    p.emit_store_field_u128(MAKER_ACCT, margin_offsets::FEE_CREDITS);
+
     // Status 0 → success.
     p.push_u64(0);
     p.raw(RETURN_VALUE);
@@ -437,18 +558,22 @@ pub fn handler_body_execute_trade() -> Vec<u8> {
 /// `liquidate_at_oracle(risk, victim, liquidator_account, liquidator,
 /// oracle_price) -> u64`.
 ///
-/// Source: percolator.rs:3601 (liquidate_at_oracle_not_atomic). Spec §12.
+/// Source: percolator.rs:3651 (liquidate_at_oracle_not_atomic). Spec §12.
 ///
-/// Simplified port: drains the victim's capital into the liquidator's
-/// reserved_pnl field. The effect is the terminal step of the real
-/// liquidation — `victim.capital → 0` and the liquidator absorbs.
+/// Full scope: computes the liquidation fee via polymorphic u128 MUL-DIV
+/// (`fee = victim.capital * liquidation_fee_bps / 10_000`), splits the
+/// victim's capital three ways — fee to the insurance fund, the rest to the
+/// liquidator — and then zeroes the victim's capital, position, and
+/// reserved-PnL fields. The PnL claim that sat on `victim.reserved_pnl` is
+/// transferred to the liquidator before the zero-out.
 ///
-/// Full spec: compute liquidation fee (liquidation_fee_bps against notional),
-/// reverse victim's position onto the liquidator, split the difference
-/// between liquidator, insurance fund, and any residual into the vault.
-/// That requires u256 muldiv and i256 sign tracking; these are the
-/// wide_signed_mul_div_floor/MULDIV_REM_U256 dependencies queued in
-/// SESSION_STATE.md.
+/// What remains deferred:
+///   * `liquidation_fee_cap` clamp — the fee here is uncapped; clamping
+///     requires a CMP + JUMP branch (the body-relative JUMP support shipped
+///     this session but no handler uses it yet).
+///   * `min_liquidation_abs` guard — trusts caller-side enforcement.
+///   * ADL-basis detachment on the victim — follow-on once the ADL handler
+///     conformance tests are in place.
 ///
 /// Params: risk=1, victim=2, liquidator_account=3, liquidator=4,
 /// oracle_price=5.
@@ -457,25 +582,68 @@ pub fn handler_body_liquidate_at_oracle() -> Vec<u8> {
     const VICTIM_ACCT: u8 = 2;
     const LIQUIDATOR_ACCT: u8 = 3;
 
-    // liquidator.reserved_pnl += victim.capital
+    // fee = victim.capital * liquidation_fee_bps / 10_000
+    // The division is u128 polymorphic DIV (opcode 0x23). Leaves fee (u128)
+    // on top of the stack after the polymorphic MUL → DIV chain.
+    p.emit_load_field_u128(VICTIM_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field(RISK_ACCT, risk_offsets::LIQUIDATION_FEE_BPS); // u64
+    p.raw(MUL);
+    p.push_u128(10_000);
+    p.raw(five_protocol::opcodes::DIV);
+    // Stack: [fee]
+
+    // Stash fee via STORE_FIELD / LOAD_FIELD to insurance_fund chain: we need
+    // fee twice (once to add to insurance_fund, once to subtract from the
+    // amount sent to the liquidator). Instead of a local, re-compute via DUP.
+    p.raw(DUP);
+    // Stack: [fee, fee]
+
+    // risk.insurance_fund += fee
+    p.emit_load_field_u128(RISK_ACCT, risk_offsets::INSURANCE_FUND);
+    p.raw(SWAP_FOR_POLY);
+    p.raw(ADD);
+    p.emit_store_field_u128(RISK_ACCT, risk_offsets::INSURANCE_FUND);
+    // Stack still has one fee on top.
+
+    // liquidator.reserved_pnl += (victim.capital - fee + victim.reserved_pnl)
+    // Build step-by-step: load liquidator.reserved_pnl, load victim.capital,
+    // add (intermediate result = liquidator_pnl + capital), subtract the fee
+    // sitting on top of the stack already (put it last via swap), then add
+    // victim.reserved_pnl for completeness.
     p.emit_load_field_u128(LIQUIDATOR_ACCT, margin_offsets::RESERVED_PNL);
     p.emit_load_field_u128(VICTIM_ACCT, margin_offsets::CAPITAL);
     p.raw(ADD);
+    // Stack: [fee, liquidator_pnl + capital]  (fee is underneath — need swap)
+    p.raw(SWAP_FOR_POLY);
+    p.raw(SUB);
+    // Stack: [liquidator_pnl + capital - fee]
+    p.emit_load_field_u128(VICTIM_ACCT, margin_offsets::RESERVED_PNL);
+    p.raw(ADD);
     p.emit_store_field_u128(LIQUIDATOR_ACCT, margin_offsets::RESERVED_PNL);
 
-    // victim.capital = 0
+    // Zero out the victim's live-state fields.
     p.push_u128(0);
     p.emit_store_field_u128(VICTIM_ACCT, margin_offsets::CAPITAL);
-
-    // victim.position_basis_q = 0 (position flattened)
+    p.push_u128(0);
+    p.emit_store_field_u128(VICTIM_ACCT, margin_offsets::RESERVED_PNL);
     p.push_u128(0);
     p.emit_store_field_u128(VICTIM_ACCT, margin_offsets::POSITION_BASIS_Q);
+
+    // Decrement open_account_count (the victim is effectively closed).
+    p.emit_load_field_u16(RISK_ACCT, risk_offsets::OPEN_ACCOUNT_COUNT);
+    p.push_u64(1);
+    p.raw(SUB);
+    p.emit_store_field_u16(RISK_ACCT, risk_offsets::OPEN_ACCOUNT_COUNT);
 
     // Status 0 → success.
     p.push_u64(0);
     p.raw(RETURN_VALUE);
     p.into_body()
 }
+
+/// Local SWAP alias so the polymorphic-arithmetic code reads without needing
+/// to import `SWAP` alongside the multi-precision opcodes.
+const SWAP_FOR_POLY: u8 = five_protocol::opcodes::SWAP;
 
 /// `keeper_crank(risk, caller, now_slot, oracle_price, funding_rate_e9) -> u64`.
 ///

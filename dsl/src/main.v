@@ -351,7 +351,9 @@ pub settle_account(
     risk: RiskEngine @mut,
     acct: MarginAccount @mut,
     caller: account @signer,
-    oracle_price: u64
+    oracle_price: u64,
+    now_slot: u64,
+    funding_rate_e9: i128
 ) -> u64 {
     return sentinel_settle_account();
 }
