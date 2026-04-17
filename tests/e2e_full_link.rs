@@ -56,7 +56,8 @@ fn linker_rewrites_all_9_sentinels_without_collisions() {
     let bin = normalize_dsl_header(&bin).expect("normalize_dsl_header accepts real main.v");
     let mut linker = Linker::from_base(&bin);
     for (sentinel, body) in all_handler_bodies() {
-        let callee = linker.append_function(&body);
+        let callee =
+            linker.append_function_with_body_relative_jumps(&body.bytes, &body.jump_patches);
         linker
             .rewrite_stub(sentinel, callee)
             .unwrap_or_else(|e| panic!("rewrite_stub({:#x}) failed: {:?}", sentinel, e));
@@ -85,7 +86,8 @@ fn linked_main_v_is_vm_native_and_parses_via_mito() {
     let bin = normalize_dsl_header(&bin).expect("normalize_dsl_header accepts real main.v");
     let mut linker = Linker::from_base(&bin);
     for (sentinel, body) in all_handler_bodies() {
-        let callee = linker.append_function(&body);
+        let callee =
+            linker.append_function_with_body_relative_jumps(&body.bytes, &body.jump_patches);
         linker.rewrite_stub(sentinel, callee).unwrap();
     }
     let linked = linker.into_bytes();
@@ -115,8 +117,9 @@ fn linked_main_v_length_equals_base_plus_appended_bodies() {
     let mut linker = Linker::from_base(&bin);
     let mut total_appended = 0usize;
     for (sentinel, body) in all_handler_bodies() {
-        total_appended += body.len();
-        let callee = linker.append_function(&body);
+        total_appended += body.bytes.len();
+        let callee =
+            linker.append_function_with_body_relative_jumps(&body.bytes, &body.jump_patches);
         linker.rewrite_stub(sentinel, callee).unwrap();
     }
     let linked = linker.into_bytes();

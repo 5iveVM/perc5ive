@@ -66,11 +66,42 @@
 //! the next-session plan; the comments on each handler below name the
 //! specific upstream invariant that body still owes.
 
-use super::emit::Program;
-use five_protocol::opcodes::{ADD, ADD_I256, DUP, MUL, RETURN_VALUE, SHIFT_RIGHT_ARITH, SUB};
+use super::emit::{BodyRelativeJumpPatch, Program};
+use five_protocol::opcodes::{
+    ADD, ADD_I256, DUP, EQ, MUL, RETURN_VALUE, SHIFT_RIGHT_ARITH, SUB,
+};
 
 /// Flag byte for the wrapping variant of every multi-precision opcode.
 const FLAG_WRAPPING_LOCAL: u8 = 0x00;
+
+/// A handler body ready to be appended by the linker.
+///
+/// `bytes` is the raw bytecode (no header, no trailing HALT). `jump_patches`
+/// is the list of byte offsets (within `bytes`) where the linker must add the
+/// final append offset to the stored u16 target — required for body-relative
+/// jumps emitted via `Program::emit_jump_*_placeholder_body_relative`.
+///
+/// Handlers with no internal branches return `jump_patches: vec![]` —
+/// `Linker::append_function_with_body_relative_jumps` degenerates to
+/// `append_function` in that case.
+#[derive(Debug, Clone)]
+pub struct HandlerBody {
+    pub bytes: Vec<u8>,
+    pub jump_patches: Vec<usize>,
+}
+
+impl HandlerBody {
+    /// Convenience: wrap a linear body (no jumps) in a HandlerBody.
+    pub fn linear(bytes: Vec<u8>) -> Self {
+        Self { bytes, jump_patches: vec![] }
+    }
+
+    /// Consume a Program together with its captured body-relative jump patches.
+    pub fn from_program_with_patches(p: Program, patches: &[BodyRelativeJumpPatch]) -> Self {
+        let (bytes, jump_patches) = p.into_body_with_jumps(patches);
+        Self { bytes, jump_patches }
+    }
+}
 
 // =============================================================================
 // Sentinels — must stay in sync with `dsl/src/main.v`'s `sentinel_*()` consts.
@@ -194,7 +225,7 @@ pub mod margin_offsets {
 /// (success) as a u64 on the stack.
 ///
 /// Source: hello_slab/percolator/src/percolator.rs top_up_insurance_fund.
-pub fn handler_body_top_up_insurance_fund() -> Vec<u8> {
+pub fn handler_body_top_up_insurance_fund() -> HandlerBody {
     let mut p = Program::new();
     // risk.insurance_fund += amount
     p.emit_load_field_u128(RISK_ACCT, risk_offsets::INSURANCE_FUND);
@@ -209,20 +240,48 @@ pub fn handler_body_top_up_insurance_fund() -> Vec<u8> {
     // Status 0 → success.
     p.push_u64(0);
     p.raw(RETURN_VALUE);
-    p.into_body()
+    HandlerBody::linear(p.into_body())
 }
 
 /// `deposit(risk, acct, owner, amount, oracle_price) -> u64`.
 ///
-/// Params: risk=1, acct=2, owner=3, amount=4, oracle_price=5.
-/// Effect: `acct.capital += amount; risk.vault += amount; risk.c_tot += amount`.
+/// Source: percolator.rs:3004 (deposit_not_atomic). Spec §10.3.
 ///
-/// The warmup-bucket promotion (spec §4.3) is NOT done here — upstream
-/// `deposit_not_atomic` handles it conditionally on `acct.pending_present`,
-/// and the DSL-side `if` support for that flag is still pending. That work
-/// lands when the remaining Percolator handlers are ported.
-pub fn handler_body_deposit() -> Vec<u8> {
+/// Params: risk=1, acct=2, owner=3, amount=4 (u128), oracle_price=5.
+///
+/// Full scope:
+///   * Vault capacity pre-check: `risk.vault + amount <= MAX_VAULT_TVL`
+///     (spec §10.3 step 1b). Abort with status 2 if exceeded.
+///   * Mutations: `acct.capital += amount; risk.vault += amount;
+///     risk.c_tot += amount`.
+///   * Fee-debt sweep: if `acct.position_basis_q == 0 && acct.pnl >= 0`,
+///     clear `acct.fee_credits` (spec §7.5 — deposit only sweeps when flat
+///     and solvent).
+///
+/// Still deferred:
+///   * New-account materialization with MIN_INITIAL_DEPOSIT + new_account_fee
+///     gate — handled by the DSL front-end before this handler runs, so the
+///     bytecode assumes the account is already materialized.
+///   * settle_losses invocation — upstream invokes it after set_capital;
+///     our flat-pos sweep approximates the effect for the common case where
+///     the account has no outstanding losses.
+pub fn handler_body_deposit() -> HandlerBody {
+    const MAX_VAULT_TVL: u128 = 10_000_000_000_000_000;
+
     let mut p = Program::new();
+    // --- Vault capacity pre-check -------------------------------------------
+    // risk.vault + amount > MAX_VAULT_TVL ⇒ abort with status 2.
+    p.emit_load_field_u128(RISK_ACCT, risk_offsets::VAULT);
+    p.emit_load_param(4);
+    p.raw(ADD);
+    p.push_u128(MAX_VAULT_TVL);
+    p.raw(five_protocol::opcodes::GT);
+    let vault_ok = p.emit_jump_if_not_placeholder_body_relative();
+    p.push_u64(2);
+    p.raw(RETURN_VALUE);
+    p.patch_jump_to_here_body_relative(vault_ok);
+
+    // --- Core mutations -----------------------------------------------------
     // acct.capital += amount
     p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
     p.emit_load_param(4);
@@ -238,46 +297,133 @@ pub fn handler_body_deposit() -> Vec<u8> {
     p.emit_load_param(4);
     p.raw(ADD);
     p.emit_store_field_u128(RISK_ACCT, risk_offsets::C_TOT);
+
+    // --- Flat-position fee-debt sweep --------------------------------------
+    // if acct.position_basis_q == 0 && acct.pnl (bit-cast as i128) is
+    // non-negative, zero acct.fee_credits. Non-negative check: sign bit of
+    // the pnl's high u64 is 0.
+    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::POSITION_BASIS_Q);
+    p.push_u128(0);
+    p.raw(EQ);
+    let skip_sweep = p.emit_jump_if_not_placeholder_body_relative();
+    // Pnl non-negative test
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::PNL + 8);
+    p.push_u64(1u64 << 63);
+    p.raw(five_protocol::opcodes::BITWISE_AND);
+    let skip_sweep_neg_pnl = p.emit_jump_if_placeholder_body_relative();
+    // Sweep: fee_credits = 0.
+    p.push_u128(0);
+    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::FEE_CREDITS);
+    p.patch_jump_to_here_body_relative(skip_sweep_neg_pnl);
+    p.patch_jump_to_here_body_relative(skip_sweep);
+
     p.push_u64(0);
     p.raw(RETURN_VALUE);
-    p.into_body()
+    HandlerBody::from_program_with_patches(p, &[vault_ok, skip_sweep, skip_sweep_neg_pnl])
 }
 
 /// `withdraw(risk, acct, owner, amount, oracle_price) -> u64`.
 ///
-/// Effect: `acct.capital -= amount; risk.vault -= amount; risk.c_tot -= amount`.
+/// Source: percolator.rs:3079 (withdraw_not_atomic). Spec §10.3.
 ///
-/// Upstream's free-collateral check (u256 muldiv against position basis) is
-/// not performed here yet — see SESSION_STATE.md remaining items. Callers
-/// invoking `withdraw` with a non-flat position need to rely on the DSL's
-/// require-check once the ctx.key + u256 conformance work lands.
-pub fn handler_body_withdraw() -> Vec<u8> {
+/// Params: risk=1, acct=2, owner=3, amount=4 (u128), oracle_price=5.
+///
+/// Full scope:
+///   * Pre-check: `amount <= acct.capital` (step 4 of the spec). Abort with
+///     status 3 if insufficient.
+///   * Dust guard: `post_cap == 0 || post_cap >= risk.min_initial_deposit`
+///     (step 5). Abort with status 4 if the remaining capital would be dust.
+///   * Free-collateral check: if position is non-zero, require
+///     `post_cap >= risk.min_nonzero_im_req` (step 6 — simplified from the
+///     full MM math that would demand notional × IM_bps / 10_000, which
+///     matches the spec's `max(..., min_nonzero_im_req)` clamp when the
+///     proportional leg floors to zero for small positions).
+///   * Mutations: `acct.capital -= amount; risk.vault -= amount;
+///     risk.c_tot -= amount`.
+///
+/// Still deferred: the proportional-notional MM check requires
+/// `MULDIV_REM_U256` fed with oracle_price × |position|; the bytecode
+/// primitive now exists (wide_signed_mul_div_floor) but wiring it into
+/// this handler's post-write flow is queued.
+pub fn handler_body_withdraw() -> HandlerBody {
     let mut p = Program::new();
-    // acct.capital -= amount
+
+    // --- amount <= capital (step 4) -----------------------------------------
+    p.emit_load_param(4);
+    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.raw(five_protocol::opcodes::GT);
+    let cap_sufficient = p.emit_jump_if_not_placeholder_body_relative();
+    p.push_u64(3);
+    p.raw(RETURN_VALUE);
+    p.patch_jump_to_here_body_relative(cap_sufficient);
+
+    // --- Dust guard (step 5) ------------------------------------------------
+    // post_cap = capital - amount (u128 polymorphic SUB, safe post step 4).
+    // If post_cap > 0 AND post_cap < min_initial_deposit → abort.
+    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_param(4);
+    p.raw(SUB);
+    p.raw(DUP);
+    p.push_u128(0);
+    p.raw(EQ);
+    let post_cap_is_zero = p.emit_jump_if_placeholder_body_relative();
+    // post_cap > 0: check >= min_initial_deposit.
+    p.raw(DUP);
+    p.emit_load_field_u128(RISK_ACCT, risk_offsets::MIN_INITIAL_DEPOSIT);
+    p.raw(five_protocol::opcodes::LT);
+    let dust_ok = p.emit_jump_if_not_placeholder_body_relative();
+    p.push_u64(4);
+    p.raw(RETURN_VALUE);
+    p.patch_jump_to_here_body_relative(dust_ok);
+    p.patch_jump_to_here_body_relative(post_cap_is_zero);
+    // Drop the duplicate post_cap (we only needed it for the branches above).
+    p.raw(five_protocol::opcodes::DROP);
+
+    // --- Free-collateral / IM check (step 6, simplified) --------------------
+    // if position_basis_q != 0 && post_cap < risk.min_nonzero_im_req → abort.
+    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::POSITION_BASIS_Q);
+    p.push_u128(0);
+    p.raw(EQ);
+    let position_is_flat = p.emit_jump_if_placeholder_body_relative();
+    // Non-flat: check post_cap vs min_nonzero_im_req.
+    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_param(4);
+    p.raw(SUB);
+    p.emit_load_field_u128(RISK_ACCT, risk_offsets::MIN_NONZERO_IM_REQ);
+    p.raw(five_protocol::opcodes::LT);
+    let collateral_ok = p.emit_jump_if_not_placeholder_body_relative();
+    p.push_u64(5);
+    p.raw(RETURN_VALUE);
+    p.patch_jump_to_here_body_relative(collateral_ok);
+    p.patch_jump_to_here_body_relative(position_is_flat);
+
+    // --- Core mutations -----------------------------------------------------
     p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
     p.emit_load_param(4);
     p.raw(SUB);
     p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
-    // risk.vault -= amount
     p.emit_load_field_u128(RISK_ACCT, risk_offsets::VAULT);
     p.emit_load_param(4);
     p.raw(SUB);
     p.emit_store_field_u128(RISK_ACCT, risk_offsets::VAULT);
-    // risk.c_tot -= amount
     p.emit_load_field_u128(RISK_ACCT, risk_offsets::C_TOT);
     p.emit_load_param(4);
     p.raw(SUB);
     p.emit_store_field_u128(RISK_ACCT, risk_offsets::C_TOT);
+
     p.push_u64(0);
     p.raw(RETURN_VALUE);
-    p.into_body()
+    HandlerBody::from_program_with_patches(
+        p,
+        &[cap_sufficient, post_cap_is_zero, dust_ok, position_is_flat, collateral_ok],
+    )
 }
 
 /// `convert_released_pnl(risk, acct, owner, amount) -> u64`.
 ///
 /// Params: risk=1, acct=2, owner=3, amount=4.
 /// Effect: `acct.reserved_pnl -= amount; acct.capital += amount`.
-pub fn handler_body_convert_released_pnl() -> Vec<u8> {
+pub fn handler_body_convert_released_pnl() -> HandlerBody {
     let mut p = Program::new();
     // acct.reserved_pnl -= amount
     p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::RESERVED_PNL);
@@ -291,7 +437,7 @@ pub fn handler_body_convert_released_pnl() -> Vec<u8> {
     p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
     p.push_u64(0);
     p.raw(RETURN_VALUE);
-    p.into_body()
+    HandlerBody::linear(p.into_body())
 }
 
 /// `close_account(risk, acct, owner) -> u64`.
@@ -303,17 +449,50 @@ pub fn handler_body_convert_released_pnl() -> Vec<u8> {
 ///   acct.capital = 0                  (u128)
 ///   acct.reserved_pnl = 0             (u128)
 ///
-/// Upstream guards this with `require(position == 0 && no pending buckets)`
-/// in DSL `require()` calls. Those compile in the DSL when the lvalue is not
-/// a u128 binary op, but we've centralized all of close_account's logic in
-/// bytecode for consistency. Position/pending-present pre-checks are added
-/// here as `require`-equivalent `CMP + JUMP_IF` guards once the full
-/// conformance suite lands. For now, the bytecode trusts caller-side
-/// invariants (matches the current DSL skeleton, which has `require(true)`
-/// placeholders pending the `ctx.key` resolution fix).
-pub fn handler_body_close_account() -> Vec<u8> {
+/// Full scope adds the flat-position pre-check (spec §10.3 close):
+///   * `acct.position_basis_q == 0` — else abort with status 6.
+///   * `acct.reserved_pnl == 0` — else abort with status 7. Upstream requires
+///     the user to convert released PnL before close.
+///   * `acct.fee_credits == 0` — else abort with status 8. Upstream's spec
+///     §7.5 requires a clean slate on close.
+///
+/// The state-transition half of the handler (zero fields + decrement counter)
+/// runs only after every guard passes.
+pub fn handler_body_close_account() -> HandlerBody {
     let mut p = Program::new();
+    let mut jump_patches = vec![];
 
+    // Guard: position_basis_q == 0.
+    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::POSITION_BASIS_Q);
+    p.push_u128(0);
+    p.raw(EQ);
+    let pos_ok = p.emit_jump_if_placeholder_body_relative();
+    jump_patches.push(pos_ok);
+    p.push_u64(6);
+    p.raw(RETURN_VALUE);
+    p.patch_jump_to_here_body_relative(pos_ok);
+
+    // Guard: reserved_pnl == 0.
+    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::RESERVED_PNL);
+    p.push_u128(0);
+    p.raw(EQ);
+    let rpnl_ok = p.emit_jump_if_placeholder_body_relative();
+    jump_patches.push(rpnl_ok);
+    p.push_u64(7);
+    p.raw(RETURN_VALUE);
+    p.patch_jump_to_here_body_relative(rpnl_ok);
+
+    // Guard: fee_credits == 0 (polymorphic EQ handles i128 bit pattern).
+    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::FEE_CREDITS);
+    p.push_u128(0);
+    p.raw(EQ);
+    let fc_ok = p.emit_jump_if_placeholder_body_relative();
+    jump_patches.push(fc_ok);
+    p.push_u64(8);
+    p.raw(RETURN_VALUE);
+    p.patch_jump_to_here_body_relative(fc_ok);
+
+    // --- State transitions (unchanged from the Simplified scope) -----------
     // risk.vault -= acct.capital
     p.emit_load_field_u128(RISK_ACCT, risk_offsets::VAULT);
     p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
@@ -344,7 +523,7 @@ pub fn handler_body_close_account() -> Vec<u8> {
 
     p.push_u64(0);
     p.raw(RETURN_VALUE);
-    p.into_body()
+    HandlerBody::from_program_with_patches(p, &jump_patches)
 }
 
 // =============================================================================
@@ -393,7 +572,7 @@ pub const SENTINEL_KEEPER_CRANK: u64 = 0xFEED_FACE_DEAD_5009;
 ///
 /// Params: risk=1, acct=2, caller=3, oracle_price=4 (u64), now_slot=5 (u64),
 /// funding_rate_e9=6 (i128).
-pub fn handler_body_settle_account() -> Vec<u8> {
+pub fn handler_body_settle_account() -> HandlerBody {
     let mut p = Program::new();
 
     // --- Direct market-state writes -----------------------------------------
@@ -448,10 +627,56 @@ pub fn handler_body_settle_account() -> Vec<u8> {
     p.emit_load_field_u128(RISK_ACCT, risk_offsets::CURRENT_FUNDING_RATE_E9);
     p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::F_SNAP);
 
+    // --- Flat-position PnL zero (branch) ------------------------------------
+    // if acct.position_basis_q == 0:
+    //     acct.pnl = 0
+    //     acct.fee_credits = 0
+    // Uses polymorphic EQ on the U128 ValueRef — EQ pushes 1 iff equal.
+    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::POSITION_BASIS_Q);
+    p.push_u128(0);
+    p.raw(EQ);
+    let skip_flat_zero = p.emit_jump_if_not_placeholder_body_relative();
+    // Flat: zero pnl + fee_credits.
+    p.push_u128(0);
+    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::PNL);
+    p.push_u128(0);
+    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::FEE_CREDITS);
+    p.patch_jump_to_here_body_relative(skip_flat_zero);
+
+    // --- Fee sweep (branch) -------------------------------------------------
+    // if acct.capital > risk.min_nonzero_im_req:
+    //     excess = acct.capital - threshold
+    //     acct.capital = threshold
+    //     acct.fee_credits += excess
+    //
+    // Polymorphic GT (0x25) handles u128 directly — pushes 1 iff capital > thr.
+    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field_u128(RISK_ACCT, risk_offsets::MIN_NONZERO_IM_REQ);
+    p.raw(five_protocol::opcodes::GT);
+    let skip_fee_sweep = p.emit_jump_if_not_placeholder_body_relative();
+    // Fee-sweep branch:
+    //   excess = capital - threshold (polymorphic u128 SUB; safe because the
+    //   branch guard above proved capital > threshold)
+    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field_u128(RISK_ACCT, risk_offsets::MIN_NONZERO_IM_REQ);
+    p.raw(SUB);
+    // Stack: [excess]
+    //   fee_credits += excess
+    p.raw(DUP);
+    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::FEE_CREDITS);
+    p.raw(ADD);
+    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::FEE_CREDITS);
+    //   capital -= excess (equivalent to capital := threshold)
+    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.raw(five_protocol::opcodes::SWAP);
+    p.raw(SUB);
+    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.patch_jump_to_here_body_relative(skip_fee_sweep);
+
     // Status 0 → success.
     p.push_u64(0);
     p.raw(RETURN_VALUE);
-    p.into_body()
+    HandlerBody::from_program_with_patches(p, &[skip_flat_zero, skip_fee_sweep])
 }
 
 /// `execute_trade(risk, taker, maker, caller, oracle_price, size_q_signed,
@@ -486,7 +711,7 @@ pub fn handler_body_settle_account() -> Vec<u8> {
 ///
 /// Params: risk=1, taker=2, maker=3, caller=4, oracle_price=5,
 /// size_q_signed=6, exec_price=7, trading_fee_override=8.
-pub fn handler_body_execute_trade() -> Vec<u8> {
+pub fn handler_body_execute_trade() -> HandlerBody {
     let mut p = Program::new();
     const TAKER_ACCT: u8 = 2;
     const MAKER_ACCT: u8 = 3;
@@ -549,10 +774,50 @@ pub fn handler_body_execute_trade() -> Vec<u8> {
     p.raw(ADD);
     p.emit_store_field_u128(MAKER_ACCT, margin_offsets::FEE_CREDITS);
 
+    // --- OI-bound enforcement (post-trade, both sides) ---------------------
+    // Spec §4.6 / percolator.rs:3303 gates the trade on
+    // `|new_position|.unsigned_abs() <= MAX_POSITION_ABS_Q` (1e14). For each
+    // of taker and maker: branch on the i128 sign bit (high u64 of
+    // position_basis_q), compute the unsigned magnitude (either pos or
+    // 0 - pos), compare against MAX_POSITION_ABS_Q with polymorphic CMP,
+    // return status 1 if exceeded.
+    const MAX_POSITION_ABS_Q: u128 = 100_000_000_000_000;
+    let mut jump_patches = vec![];
+    for account in [TAKER_ACCT, MAKER_ACCT] {
+        // Sign test on the high u64 of position_basis_q.
+        p.emit_load_field(account, margin_offsets::POSITION_BASIS_Q + 8);
+        p.push_u64(1u64 << 63);
+        p.raw(five_protocol::opcodes::BITWISE_AND);
+        let pos_non_negative = p.emit_jump_if_not_placeholder_body_relative();
+        jump_patches.push(pos_non_negative);
+        // Negative branch: magnitude = 0 - pos (u128 polymorphic SUB).
+        p.push_u128(0);
+        p.emit_load_field_u128(account, margin_offsets::POSITION_BASIS_Q);
+        p.raw(SUB);
+        let jmp_to_cmp = p.emit_jump_placeholder_body_relative();
+        jump_patches.push(jmp_to_cmp);
+        // Positive branch: magnitude = pos as u128.
+        p.patch_jump_to_here_body_relative(pos_non_negative);
+        p.emit_load_field_u128(account, margin_offsets::POSITION_BASIS_Q);
+        // Join with u128 magnitude on top of stack.
+        p.patch_jump_to_here_body_relative(jmp_to_cmp);
+        // Compare vs MAX_POSITION_ABS_Q using polymorphic GT (opcode 0x25).
+        // Stack before GT: [magnitude, MAX_POSITION_ABS_Q]; polymorphic_comparison_op
+        // pops b then a and pushes (a > b), so pushing MAX second gives exactly
+        // the predicate magnitude > MAX.
+        p.push_u128(MAX_POSITION_ABS_Q);
+        p.raw(five_protocol::opcodes::GT);
+        let ok = p.emit_jump_if_not_placeholder_body_relative();
+        jump_patches.push(ok);
+        p.push_u64(1);
+        p.raw(RETURN_VALUE);
+        p.patch_jump_to_here_body_relative(ok);
+    }
+
     // Status 0 → success.
     p.push_u64(0);
     p.raw(RETURN_VALUE);
-    p.into_body()
+    HandlerBody::from_program_with_patches(p, &jump_patches)
 }
 
 /// `liquidate_at_oracle(risk, victim, liquidator_account, liquidator,
@@ -577,7 +842,7 @@ pub fn handler_body_execute_trade() -> Vec<u8> {
 ///
 /// Params: risk=1, victim=2, liquidator_account=3, liquidator=4,
 /// oracle_price=5.
-pub fn handler_body_liquidate_at_oracle() -> Vec<u8> {
+pub fn handler_body_liquidate_at_oracle() -> HandlerBody {
     let mut p = Program::new();
     const VICTIM_ACCT: u8 = 2;
     const LIQUIDATOR_ACCT: u8 = 3;
@@ -590,11 +855,26 @@ pub fn handler_body_liquidate_at_oracle() -> Vec<u8> {
     p.raw(MUL);
     p.push_u128(10_000);
     p.raw(five_protocol::opcodes::DIV);
-    // Stack: [fee]
+    // Stack: [fee_raw]
 
-    // Stash fee via STORE_FIELD / LOAD_FIELD to insurance_fund chain: we need
-    // fee twice (once to add to insurance_fund, once to subtract from the
-    // amount sent to the liquidator). Instead of a local, re-compute via DUP.
+    // --- fee_cap clamp (branch) --------------------------------------------
+    // fee = min(fee_raw, risk.liquidation_fee_cap) — spec §12 caps fees to
+    // prevent a liquidator from extracting more than the absolute cap on an
+    // unusually large liquidation. Done inline so the rest of this handler
+    // can assume `fee` is already clamped.
+    p.raw(DUP);
+    p.emit_load_field_u128(RISK_ACCT, risk_offsets::LIQUIDATION_FEE_CAP);
+    p.raw(five_protocol::opcodes::GT);
+    // Stack: [fee_raw, (fee_raw > cap)]
+    let fee_within_cap = p.emit_jump_if_not_placeholder_body_relative();
+    // Over-cap branch: pop fee_raw, push cap (ignored the copy above).
+    p.raw(five_protocol::opcodes::DROP);
+    p.emit_load_field_u128(RISK_ACCT, risk_offsets::LIQUIDATION_FEE_CAP);
+    p.patch_jump_to_here_body_relative(fee_within_cap);
+    // Stack: [fee]  (either fee_raw itself, or cap, whichever was smaller)
+
+    // DUP so the fee stays available for both the insurance credit and the
+    // liquidator's share subtraction later on.
     p.raw(DUP);
     // Stack: [fee, fee]
 
@@ -638,7 +918,7 @@ pub fn handler_body_liquidate_at_oracle() -> Vec<u8> {
     // Status 0 → success.
     p.push_u64(0);
     p.raw(RETURN_VALUE);
-    p.into_body()
+    HandlerBody::from_program_with_patches(p, &[fee_within_cap])
 }
 
 /// Local SWAP alias so the polymorphic-arithmetic code reads without needing
@@ -647,35 +927,102 @@ const SWAP_FOR_POLY: u8 = five_protocol::opcodes::SWAP;
 
 /// `keeper_crank(risk, caller, now_slot, oracle_price, funding_rate_e9) -> u64`.
 ///
-/// Source: percolator.rs:3784 (keeper_crank_not_atomic). Spec §13.
+/// Source: percolator.rs:3836 (keeper_crank_not_atomic). Spec §13.
 ///
-/// The DSL handler in `dsl/src/main.v` already handles the non-u128 fields
-/// inline (current_slot, current_oracle_price, current_funding_rate_e9,
-/// last_funding_update_slot). This bytecode body exists to add the
-/// future-work hook for batch liquidation loops. For now it's a no-op
-/// sentinel — the DSL side does the real work.
+/// Full scope:
+///   * Time monotonicity: `now_slot >= risk.current_slot` (spec §13 step 3).
+///     Abort with status 9 if violated.
+///   * Accrue market: fold `funding_rate_e9` into `risk.cumulative_funding_e9`
+///     (i256 ADD_I256 with sign-extended delta — same sequence as
+///     settle_account's accrual).
+///   * last_crank_slot advance: if `now_slot > risk.last_crank_slot`,
+///     set `last_crank_slot = now_slot`. Implemented as an unconditional
+///     polymorphic `max(now_slot, last_crank_slot)` write (correct in both
+///     cases — if now_slot <= last_crank_slot the old value is preserved).
+///     Uses GT + conditional store.
+///
+/// Still deferred:
+///   * Batch-liquidation loop over `ordered_candidates` — needs iterative
+///     bytecode with bitmap scanning over risk.account_bitmap_lo/hi and a
+///     call-into-liquidate-at-oracle path. The single-account liquidation
+///     path is already Full (handler_body_liquidate_at_oracle); a batching
+///     driver is future work best done in DSL.
 ///
 /// Params: risk=1, caller=2, now_slot=3, oracle_price=4, funding_rate_e9=5.
-pub fn handler_body_keeper_crank() -> Vec<u8> {
+pub fn handler_body_keeper_crank() -> HandlerBody {
     let mut p = Program::new();
-    // Currently delegated to the DSL pure-arithmetic block. Return 0 to
-    // signal success; leave the u128/i256-heavy batch-liquidation loop for
-    // the post-MULDIV_REM_U256 session.
+    let mut jump_patches = vec![];
+
+    // --- Time monotonicity (step 3) ----------------------------------------
+    // now_slot < risk.current_slot ⇒ abort with status 9.
+    p.emit_load_param(3); // now_slot (u64)
+    p.emit_load_field(RISK_ACCT, risk_offsets::CURRENT_SLOT);
+    p.raw(five_protocol::opcodes::LT);
+    let monotonic_ok = p.emit_jump_if_not_placeholder_body_relative();
+    jump_patches.push(monotonic_ok);
+    p.push_u64(9);
+    p.raw(RETURN_VALUE);
+    p.patch_jump_to_here_body_relative(monotonic_ok);
+
+    // --- Cumulative funding accrual (i256) ---------------------------------
+    // risk.cumulative_funding_e9 += sign_extended(funding_rate_e9)
+    // Stack: [cum_0, cum_1, cum_2, cum_3, lo, hi, sext, sext]
+    p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0);
+    p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 8);
+    p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 16);
+    p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 24);
+    // Read current_funding_rate_e9 back as two u64 halves (the DSL side just
+    // wrote it from funding_rate_e9 immediately before calling this body).
+    p.emit_load_field(RISK_ACCT, risk_offsets::CURRENT_FUNDING_RATE_E9);
+    p.emit_load_field(RISK_ACCT, risk_offsets::CURRENT_FUNDING_RATE_E9 + 8);
+    p.raw(DUP);
+    p.push_u64(63);
+    p.raw(SHIFT_RIGHT_ARITH);
+    p.raw(DUP);
+    p.raw_bytes(&[ADD_I256, FLAG_WRAPPING_LOCAL]);
+    // Store limbs back (top-down r3 → r0).
+    p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 24);
+    p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 16);
+    p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 8);
+    p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0);
+
+    // --- last_crank_slot advance -------------------------------------------
+    // if now_slot > risk.last_crank_slot: write now_slot there.
+    // (The DSL side wrote last_funding_update_slot already; this field is
+    // distinct — tracks when the KEEPER last ran vs when funding was last
+    // applied. Sometimes they coincide, sometimes they don't.)
+    //
+    // Note: the spec uses `last_crank_slot` on the RiskEngine, but our DSL
+    // struct calls the same semantic field `last_funding_update_slot`.
+    // We reuse that field for the keeper slot update — writing it twice is
+    // idempotent for the common case. The DSL's own last_funding_update_slot
+    // write happens unconditionally, so this branch effectively no-ops when
+    // the slot is already up-to-date.
+    p.emit_load_param(3); // now_slot
+    p.emit_load_field(RISK_ACCT, risk_offsets::LAST_FUNDING_UPDATE_SLOT);
+    p.raw(five_protocol::opcodes::GT);
+    let crank_not_advancing = p.emit_jump_if_not_placeholder_body_relative();
+    jump_patches.push(crank_not_advancing);
+    p.emit_load_param(3);
+    p.emit_store_field(RISK_ACCT, risk_offsets::LAST_FUNDING_UPDATE_SLOT);
+    p.patch_jump_to_here_body_relative(crank_not_advancing);
+
     p.push_u64(0);
     p.raw(RETURN_VALUE);
-    p.into_body()
+    HandlerBody::from_program_with_patches(p, &jump_patches)
 }
 
 // =============================================================================
 // Linker convenience
 // =============================================================================
 
-/// (sentinel, callee-body-bytes) pair for every Percolator handler.
+/// (sentinel, HandlerBody) pair for every Percolator handler.
 ///
 /// Used by tests and by consumers that want to fully link a compiled main.v
 /// in one call. Order is arbitrary — the linker handles each sentinel
-/// independently.
-pub fn all_handler_bodies() -> [(u64, Vec<u8>); 9] {
+/// independently. Each HandlerBody carries both the raw bytes and the list of
+/// body-relative jump offsets the linker must fix up at append time.
+pub fn all_handler_bodies() -> [(u64, HandlerBody); 9] {
     [
         (
             SENTINEL_TOP_UP_INSURANCE_FUND,
@@ -705,13 +1052,29 @@ mod tests {
     #[test]
     fn all_handler_bodies_are_nonempty_and_end_with_return_value() {
         for (sentinel, body) in all_handler_bodies() {
-            assert!(!body.is_empty(), "empty body for sentinel {:#x}", sentinel);
-            // Each body should end with `push_u64(0); RETURN_VALUE`. push_u64(0)
-            // emits `PUSH_U64 (0x1B), 0x00` = 2 bytes. So the last 3 bytes are
-            // 0x1B, 0x00, 0x07 (RETURN_VALUE).
-            let n = body.len();
+            assert!(
+                !body.bytes.is_empty(),
+                "empty body for sentinel {:#x}",
+                sentinel
+            );
+            let n = body.bytes.len();
             assert!(n >= 3, "body too short for sentinel {:#x}", sentinel);
-            assert_eq!(body[n - 1], RETURN_VALUE);
+            assert_eq!(body.bytes[n - 1], RETURN_VALUE);
+        }
+    }
+
+    #[test]
+    fn body_relative_jump_patches_stay_within_bounds() {
+        for (sentinel, body) in all_handler_bodies() {
+            for &patch in &body.jump_patches {
+                assert!(
+                    patch + 2 <= body.bytes.len(),
+                    "jump patch at {} overruns body length {} (sentinel {:#x})",
+                    patch,
+                    body.bytes.len(),
+                    sentinel
+                );
+            }
         }
     }
 }
