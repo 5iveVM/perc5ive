@@ -42,6 +42,7 @@
 
 #![allow(clippy::unreadable_literal)]
 
+pub mod anatoly_conformance;
 pub mod arithmetic_conformance;
 pub mod field_access_conformance;
 pub mod handler_conformance;
