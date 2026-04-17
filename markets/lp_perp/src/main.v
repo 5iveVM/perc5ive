@@ -40,7 +40,7 @@ account LpPerpPosition {
     user: pubkey;
     market: pubkey;
     margin_account: pubkey;       // Percolator MarginAccount
-    size_q: i128;                 // signed position, POS_SCALE units
+    size_q: u128;                 // signed position, POS_SCALE units
     entry_pool_price: u64;
     hedge_target: u8;             // 0 = speculative, 1 = LP hedge
     lp_pool_shares_ref: pubkey;   // LP shares this position is hedging
@@ -106,7 +106,7 @@ pub open_hedge(
     market: LpPerpMarket,
     position: LpPerpPosition @mut,
     user: account @mut @signer,
-    size_q: i128,
+    size_q: u128,
     hedge_target: u8,
     lp_pool_shares_ref: pubkey,
     entry_pool_price: u64,
@@ -138,7 +138,7 @@ pub settle_funding(
     market: LpPerpMarket,
     position: LpPerpPosition @mut,
     user: account @mut @signer,
-    funding_rate_e9: i128,
+    funding_rate_e9: u128,
     now_slot: u64
 ) {
     position.last_settle_slot = now_slot;

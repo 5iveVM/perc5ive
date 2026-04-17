@@ -100,17 +100,17 @@ account MarginAccount {
     account_idx: u16;
 
     capital: u128;
-    pnl: i128;
+    pnl: u128;
     reserved_pnl: u128;
 
-    position_basis_q: i128;
+    position_basis_q: u128;
 
     adl_a_basis: u128;
-    adl_k_snap: i128;
-    f_snap: i128;
+    adl_k_snap: u128;
+    f_snap: u128;
     adl_epoch_snap: u64;
 
-    fee_credits: i128;
+    fee_credits: u128;
 
     sched_present: u8;
     sched_remaining_q: u128;
@@ -213,7 +213,7 @@ account RiskEngine {
 
     current_slot: u64;
     current_oracle_price: u64;
-    current_funding_rate_e9: i128;
+    current_funding_rate_e9: u128;
     market_mode: u8;
 
     resolved_price: u64;
@@ -353,7 +353,7 @@ pub settle_account(
     caller: account @signer,
     oracle_price: u64,
     now_slot: u64,
-    funding_rate_e9: i128
+    funding_rate_e9: u128
 ) -> u64 {
     return sentinel_settle_account();
 }
@@ -364,7 +364,7 @@ pub execute_trade(
     maker: MarginAccount @mut,
     caller: account @signer,
     oracle_price: u64,
-    size_q_signed: i128,
+    size_q_signed: u128,
     exec_price: u64,
     trading_fee_override: u64
 ) -> u64 {
@@ -390,7 +390,7 @@ pub keeper_crank(
     caller: account @signer,
     now_slot: u64,
     oracle_price: u64,
-    funding_rate_e9_lo: i128
+    funding_rate_e9_lo: u128
 ) -> u64 {
     risk.current_slot = now_slot;
     risk.current_oracle_price = oracle_price;

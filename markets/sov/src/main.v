@@ -131,7 +131,7 @@ pub open_short(
     taker: SovPosition @mut,
     maker: SovPosition @mut,
     user: account @mut @signer,
-    size_q: i128,
+    size_q: u128,
     exec_price: u64,
     now_slot: u64
 ) {

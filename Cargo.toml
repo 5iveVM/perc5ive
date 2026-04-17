@@ -18,16 +18,16 @@ name = "normalize-dsl-header"
 path = "src/bin/normalize_dsl_header.rs"
 
 [dependencies]
-five-protocol = { path = "../five-protocol" }
-five-vm-mito = { path = "../five-vm-mito" }
+# Mono-repo path deps. The 5iveVM team consolidated the previously-separate
+# five-protocol / five-vm-mito / five-dsl-compiler repos into
+# https://github.com/5iveVM/five-mono. A sibling `five-mono/` checkout is
+# required.
+five-protocol = { path = "../five-mono/five-protocol" }
+five-vm-mito = { path = "../five-mono/five-vm-mito" }
 
 [build-dependencies]
-# Compiles dsl/src/main.v → target/perc5ive.fbin at build time. Source HEAD
-# (currently 3d92ade on main) includes the u128-rvalue fix that the published
-# @five-vm/cli WASM does not. Path dep matches the existing five-protocol /
-# five-vm-mito convention; swap to git or published when the compiler crate
-# is restructured to resolve its own deps without sibling checkouts.
-five-dsl-compiler = { path = "../five-dsl-compiler" }
+# Compiles dsl/src/main.v + markets/*/src/main.v → target/*.fbin at build.
+five-dsl-compiler = { path = "../five-mono/five-dsl-compiler" }
 
 [dev-dependencies]
 # Version-pinned to match five-vm-mito's dep so the test account-info shim
