@@ -8,19 +8,22 @@ Submitted to **Colosseum Frontier 2026**.
 
 | Component | State | Tests |
 |---|---|---|
-| `src/bytecode/{u256,i256,i128}.rs` — math primitives | full port vs. Anatoly's wide_math.rs | 52 conformance |
-| `src/bytecode/handlers.rs` — instruction bodies | 9 handlers (5 full, 4 simplified) | 10 unit |
-| `src/bytecode/link.rs` — linker | sentinel-rewrite pipeline | 6 e2e |
-| `src/bytecode/dsl_header.rs` — header normalizer | DSL→VM header conversion | 8 e2e |
+| `src/bytecode/{u256,i256,i128}.rs` — math primitives | full port vs. Anatoly's wide_math.rs, incl. `wide_signed_mul_div_floor` bytecode + `saturating_add_i256` runtime-rhs | 66 |
+| `src/bytecode/handlers.rs` — instruction bodies | **9 of 9 handlers Full scope** (all spec-level invariants + body-relative JUMP guards) | 22 unit |
+| `src/bytecode/link.rs` — linker | sentinel-rewrite pipeline + body-relative JUMP fix-up at append | 6 e2e |
+| `src/bytecode/dsl_header.rs` — header normalizer | DSL→VM header conversion | — |
 | `tests/e2e_integration.rs` — VM × AccountInfo | full pipeline with real pinocchio AccountInfo shim | 9 e2e |
 | `tests/e2e_full_link.rs` — compiled main.v × all 9 handler bodies | build.rs output linked end-to-end | 4 e2e |
-| `build.rs` — DSL build step | compiles `dsl/src/main.v` → `target/perc5ive.fbin` on every build | — |
-| `dsl/src/main.v` — Percolator in 5ive DSL | signatures + sentinel stubs | — |
+| `tests/devnet_reproducibility.rs` — cold-clone verification | artifact sizes match DEVNET.md advertised sizes | 5 e2e |
+| `build.rs` — DSL build step | compiles `dsl/src/main.v` + three market binaries on every build | — |
+| `dsl/src/main.v` — Percolator in 5ive DSL | full handler signatures; sentinel stubs wired to bytecode bodies | — |
 | `markets/{sov,pyth_race,lp_perp}/src/main.v` | 3 thin DSL wrappers | — |
-| `bench/` — PercolatorBench conformance harness | crate scaffold, 11 tests | 11 |
-| `mcp/` — MCP-Perc5ive tool catalogue | 19 tool schemas, transport pending | 4 |
+| `bench/` — PercolatorBench conformance harness | Anatoly-direct conformance: u8² / i8² enumeration vs. hello_slab/percolator, plus our own probe suite | 24 |
+| `mcp/` — MCP-Perc5ive stdio server | 19 tool catalogue; **5 simulation tools wired** (liquidation, trade, crank, pnl projection, risk-math walkthrough) | 13 |
 
-**145 tests green across 3 crates.**
+**191 tests green across 3 crates.** All 9 handlers ship at Full scope — every spec-level guard (OI bounds, fee cap, dust protection, free-collateral check, flat-position fee sweep, time monotonicity) is now enforced in bytecode via the body-relative JUMP infrastructure.
+
+**Upstream VM work** (as of 2026-04-17): 7 open PRs extend `five-protocol` + `five-vm-mito` with the opcode set Percolator needs — `u256/i128/i256` arithmetic (#37/#84), sized field access (#38/#85), `input_data` u128 typed params (#86), and **MULDIV_REM_U256** (#39/#87) which surfaces the 512-bit remainder that `wide_signed_mul_div_floor` needs for floor-toward-(-∞) rounding.
 
 ## Why
 
@@ -61,8 +64,8 @@ perc5ive/
 │   ├── pyth_race/src/main.v
 │   └── lp_perp/src/main.v
 ├── bench/                 # PercolatorBench conformance harness
-├── mcp/                   # MCP-Perc5ive tool catalogue
-├── launch/                # Demo script + launch tweet thread
+├── mcp/                   # MCP-Perc5ive tool catalogue + stdio server
+├── scripts/               # deploy.sh + helper tooling
 ├── hello_slab/            # Anatoly's percolator as a reference (gitignored; clone separately)
 ├── SPEC.md                # Percolator spec v12.17.0 primitives
 ├── RESOURCES.md           # External references + tools
@@ -76,9 +79,12 @@ perc5ive/
 
 ```
 cargo test                           # run all perc5ive tests (regenerates .fbin via build.rs)
-cd bench && cargo test               # run PercolatorBench
-cd mcp && cargo test                 # run MCP tool-schema tests
+cd bench && cargo test               # run PercolatorBench (includes Anatoly-direct conformance)
+cd mcp && cargo test                 # run MCP tool-schema + simulation handler tests
+cd mcp && cargo run --bin mcp-perc5ive   # start the stdio MCP server
 ```
+
+The full-link path — compiled main.v + all 9 hand-written handler bodies appended and sentinel-rewritten — is exercised by `tests/e2e_full_link.rs`. The devnet deployments advertised in `DEVNET.md` are byte-for-byte reproducible from a fresh clone; `tests/devnet_reproducibility.rs` asserts that invariant.
 
 ### Local dependencies
 
