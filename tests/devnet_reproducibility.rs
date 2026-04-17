@@ -21,6 +21,13 @@ const ARTIFACTS: &[(&str, usize)] = &[
     ("target/lp_perp.fbin", 266),
 ];
 
+/// Sizes for the *linked* perc5ive binary (what actually ships on-chain).
+/// The base `.fbin` is DSL output with sentinel stubs; the linked binary has
+/// those stubs rewritten to CALLs into 9 appended handler bodies. Size is
+/// base + sum of handler body sizes; any drift here means the handler
+/// bodies changed and the deployed program needs a redeploy.
+const LINKED_PERC5IVE_SIZE: usize = 1550;
+
 fn read(path: &str) -> Vec<u8> {
     std::fs::read(path).unwrap_or_else(|e| {
         panic!(
@@ -89,6 +96,48 @@ fn deploy_script_exists_and_is_executable() {
     assert!(
         mode & 0o100 != 0,
         "scripts/deploy.sh is not executable (mode {mode:o}) — chmod +x required"
+    );
+}
+
+#[test]
+fn linked_perc5ive_has_no_sentinels_and_expected_size() {
+    // Run the linker in-process so the test doesn't depend on `cargo run`.
+    use perc5ive::bytecode::{
+        dsl_header::normalize_dsl_header, handlers::all_handler_bodies, link::Linker,
+    };
+
+    let fbin = read("target/perc5ive.fbin");
+    let base = normalize_dsl_header(&fbin).expect("normalize_dsl_header on target/perc5ive.fbin");
+
+    let mut linker = Linker::from_base(&base);
+    for (sentinel, body) in all_handler_bodies() {
+        let callee =
+            linker.append_function_with_body_relative_jumps(&body.bytes, &body.jump_patches);
+        linker
+            .rewrite_stub(sentinel, callee)
+            .unwrap_or_else(|e| panic!("rewrite_stub({sentinel:#x}): {e:?}"));
+    }
+    let linked = linker.into_bytes();
+
+    // Post-link every sentinel must be gone.
+    let verify = Linker::from_base(&linked);
+    for (sentinel, _) in all_handler_bodies() {
+        assert_eq!(
+            verify.find_stub(sentinel).unwrap(),
+            None,
+            "sentinel {sentinel:#x} survived the rewrite"
+        );
+    }
+
+    // Length must match the expected on-chain size.
+    assert_eq!(
+        linked.len(),
+        LINKED_PERC5IVE_SIZE,
+        "linked perc5ive is {} bytes, expected {}. If this is intentional, \
+         redeploy to devnet via `scripts/deploy.sh perc5ive --target devnet` \
+         and update DEVNET.md + LINKED_PERC5IVE_SIZE.",
+        linked.len(),
+        LINKED_PERC5IVE_SIZE,
     );
 }
 

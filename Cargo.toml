@@ -9,6 +9,10 @@ build = "build.rs"
 [lib]
 path = "src/lib.rs"
 
+[[bin]]
+name = "link-perc5ive"
+path = "src/bin/link_perc5ive.rs"
+
 [dependencies]
 five-protocol = { path = "../five-protocol" }
 five-vm-mito = { path = "../five-vm-mito" }
