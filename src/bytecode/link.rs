@@ -37,7 +37,7 @@
 //!   `script.len()` only); the off-line `parse_optimized_bytecode` analyzer
 //!   does, but that analyzer is not on the runtime path.
 
-use super::emit::{write_vle_u64, CallPatch};
+use super::emit::CallPatch;
 use five_protocol::opcodes::{CALL, NOP, PUSH_U64, RETURN_VALUE};
 
 /// Mutable working buffer for an in-progress link.
@@ -184,10 +184,11 @@ impl Linker {
     // ------------------------------------------------------------------------
 
     /// Compute the exact byte sequence that `five-dsl-compiler` emits for the
-    /// stub body `return <sentinel>;`.
+    /// stub body `return <sentinel>;`. Mono uses fixed-width encoding: the
+    /// sentinel is 8 LE bytes after the opcode.
     fn stub_pattern(sentinel: u64) -> Vec<u8> {
         let mut bytes = vec![PUSH_U64];
-        write_vle_u64(&mut bytes, sentinel);
+        bytes.extend_from_slice(&sentinel.to_le_bytes());
         bytes.push(RETURN_VALUE);
         bytes
     }

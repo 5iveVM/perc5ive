@@ -67,12 +67,7 @@
 //! specific upstream invariant that body still owes.
 
 use super::emit::{BodyRelativeJumpPatch, Program};
-use five_protocol::opcodes::{
-    ADD, ADD_I256, DUP, EQ, MUL, RETURN_VALUE, SHIFT_RIGHT_ARITH, SUB,
-};
-
-/// Flag byte for the wrapping variant of every multi-precision opcode.
-const FLAG_WRAPPING_LOCAL: u8 = 0x00;
+use five_protocol::opcodes::{ADD, DUP, EQ, MUL, RETURN_VALUE, SUB};
 
 /// A handler body ready to be appended by the linker.
 ///
@@ -140,78 +135,78 @@ pub mod risk_offsets {
     //! Packed offsets for fields on `RiskEngine` referenced by the handlers.
     //! Values come from the `account RiskEngine { ... }` declaration in
     //! `dsl/src/main.v` and were verified with compiler probes.
-    pub const ADMIN: u64 = 0;
-    pub const MATCHER_PROGRAM: u64 = 32;
-    pub const ORACLE: u64 = 64;
-    pub const VAULT: u64 = 96;
-    pub const INSURANCE_FUND: u64 = 112;
-    pub const MAINTENANCE_MARGIN_BPS: u64 = 128;
-    pub const INITIAL_MARGIN_BPS: u64 = 136;
-    pub const TRADING_FEE_BPS: u64 = 144;
-    pub const MAX_ACCOUNTS: u64 = 152;
-    pub const NEW_ACCOUNT_FEE: u64 = 160;
-    pub const MAX_CRANK_STALENESS_SLOTS: u64 = 176;
-    pub const LIQUIDATION_FEE_BPS: u64 = 184;
-    pub const LIQUIDATION_FEE_CAP: u64 = 192;
-    pub const MIN_LIQUIDATION_ABS: u64 = 208;
-    pub const MIN_INITIAL_DEPOSIT: u64 = 224;
-    pub const MIN_NONZERO_MM_REQ: u64 = 240;
-    pub const MIN_NONZERO_IM_REQ: u64 = 256;
-    pub const INSURANCE_FLOOR: u64 = 272;
-    pub const H_MIN: u64 = 288;
-    pub const H_MAX: u64 = 296;
-    pub const RESOLVE_PRICE_DEVIATION_BPS: u64 = 304;
-    pub const CURRENT_SLOT: u64 = 312;
-    pub const CURRENT_ORACLE_PRICE: u64 = 320;
-    pub const CURRENT_FUNDING_RATE_E9: u64 = 328;
-    pub const MARKET_MODE: u64 = 344;
-    pub const RESOLVED_PRICE: u64 = 345;
-    pub const RESOLVED_SLOT: u64 = 353;
-    pub const RESOLVED_H_NUM: u64 = 361;
-    pub const RESOLVED_H_DEN: u64 = 377;
-    pub const C_TOT: u64 = 393;
-    pub const H_NUM: u64 = 409;
-    pub const ADL_A_LONG_LIMB_0: u64 = 425;
-    pub const ADL_A_SHORT_LIMB_0: u64 = 457;
-    pub const ADL_K_LONG_LIMB_0: u64 = 489;
-    pub const ADL_K_SHORT_LIMB_0: u64 = 521;
-    pub const ADL_EPOCH_LONG: u64 = 553;
-    pub const ADL_EPOCH_SHORT: u64 = 561;
-    pub const CUMULATIVE_FUNDING_E9_LIMB_0: u64 = 569;
-    pub const OPEN_ACCOUNT_COUNT: u64 = 601;
-    pub const ACCOUNT_BITMAP_HI: u64 = 603;
-    pub const ACCOUNT_BITMAP_LO: u64 = 619;
-    pub const LAST_FUNDING_UPDATE_SLOT: u64 = 635;
-    pub const PENDING_CRANKS: u64 = 643;
+    pub const ADMIN: u32 = 0;
+    pub const MATCHER_PROGRAM: u32 = 32;
+    pub const ORACLE: u32 = 64;
+    pub const VAULT: u32 = 96;
+    pub const INSURANCE_FUND: u32 = 112;
+    pub const MAINTENANCE_MARGIN_BPS: u32 = 128;
+    pub const INITIAL_MARGIN_BPS: u32 = 136;
+    pub const TRADING_FEE_BPS: u32 = 144;
+    pub const MAX_ACCOUNTS: u32 = 152;
+    pub const NEW_ACCOUNT_FEE: u32 = 160;
+    pub const MAX_CRANK_STALENESS_SLOTS: u32 = 176;
+    pub const LIQUIDATION_FEE_BPS: u32 = 184;
+    pub const LIQUIDATION_FEE_CAP: u32 = 192;
+    pub const MIN_LIQUIDATION_ABS: u32 = 208;
+    pub const MIN_INITIAL_DEPOSIT: u32 = 224;
+    pub const MIN_NONZERO_MM_REQ: u32 = 240;
+    pub const MIN_NONZERO_IM_REQ: u32 = 256;
+    pub const INSURANCE_FLOOR: u32 = 272;
+    pub const H_MIN: u32 = 288;
+    pub const H_MAX: u32 = 296;
+    pub const RESOLVE_PRICE_DEVIATION_BPS: u32 = 304;
+    pub const CURRENT_SLOT: u32 = 312;
+    pub const CURRENT_ORACLE_PRICE: u32 = 320;
+    pub const CURRENT_FUNDING_RATE_E9: u32 = 328;
+    pub const MARKET_MODE: u32 = 344;
+    pub const RESOLVED_PRICE: u32 = 345;
+    pub const RESOLVED_SLOT: u32 = 353;
+    pub const RESOLVED_H_NUM: u32 = 361;
+    pub const RESOLVED_H_DEN: u32 = 377;
+    pub const C_TOT: u32 = 393;
+    pub const H_NUM: u32 = 409;
+    pub const ADL_A_LONG_LIMB_0: u32 = 425;
+    pub const ADL_A_SHORT_LIMB_0: u32 = 457;
+    pub const ADL_K_LONG_LIMB_0: u32 = 489;
+    pub const ADL_K_SHORT_LIMB_0: u32 = 521;
+    pub const ADL_EPOCH_LONG: u32 = 553;
+    pub const ADL_EPOCH_SHORT: u32 = 561;
+    pub const CUMULATIVE_FUNDING_E9_LIMB_0: u32 = 569;
+    pub const OPEN_ACCOUNT_COUNT: u32 = 601;
+    pub const ACCOUNT_BITMAP_HI: u32 = 603;
+    pub const ACCOUNT_BITMAP_LO: u32 = 619;
+    pub const LAST_FUNDING_UPDATE_SLOT: u32 = 635;
+    pub const PENDING_CRANKS: u32 = 643;
 }
 
 pub mod margin_offsets {
     //! Packed offsets for fields on `MarginAccount` referenced by the
     //! handlers. See `account MarginAccount { ... }` in `dsl/src/main.v`.
-    pub const HOLDER: u64 = 0;
-    pub const MATCHER_PROGRAM: u64 = 32;
-    pub const MATCHER_CONTEXT: u64 = 64;
-    pub const KIND: u64 = 96;
-    pub const ACCOUNT_IDX: u64 = 97;
-    pub const CAPITAL: u64 = 99;
-    pub const PNL: u64 = 115;
-    pub const RESERVED_PNL: u64 = 131;
-    pub const POSITION_BASIS_Q: u64 = 147;
-    pub const ADL_A_BASIS: u64 = 163;
-    pub const ADL_K_SNAP: u64 = 179;
-    pub const F_SNAP: u64 = 195;
-    pub const ADL_EPOCH_SNAP: u64 = 211;
-    pub const FEE_CREDITS: u64 = 219;
-    pub const SCHED_PRESENT: u64 = 235;
-    pub const SCHED_REMAINING_Q: u64 = 236;
-    pub const SCHED_ANCHOR_Q: u64 = 252;
-    pub const SCHED_START_SLOT: u64 = 268;
-    pub const SCHED_HORIZON: u64 = 276;
-    pub const SCHED_RELEASE_Q: u64 = 284;
-    pub const PENDING_PRESENT: u64 = 300;
-    pub const PENDING_REMAINING_Q: u64 = 301;
-    pub const PENDING_HORIZON: u64 = 317;
-    pub const PENDING_CREATED_SLOT: u64 = 325;
+    pub const HOLDER: u32 = 0;
+    pub const MATCHER_PROGRAM: u32 = 32;
+    pub const MATCHER_CONTEXT: u32 = 64;
+    pub const KIND: u32 = 96;
+    pub const ACCOUNT_IDX: u32 = 97;
+    pub const CAPITAL: u32 = 99;
+    pub const PNL: u32 = 115;
+    pub const RESERVED_PNL: u32 = 131;
+    pub const POSITION_BASIS_Q: u32 = 147;
+    pub const ADL_A_BASIS: u32 = 163;
+    pub const ADL_K_SNAP: u32 = 179;
+    pub const F_SNAP: u32 = 195;
+    pub const ADL_EPOCH_SNAP: u32 = 211;
+    pub const FEE_CREDITS: u32 = 219;
+    pub const SCHED_PRESENT: u32 = 235;
+    pub const SCHED_REMAINING_Q: u32 = 236;
+    pub const SCHED_ANCHOR_Q: u32 = 252;
+    pub const SCHED_START_SLOT: u32 = 268;
+    pub const SCHED_HORIZON: u32 = 276;
+    pub const SCHED_RELEASE_Q: u32 = 284;
+    pub const PENDING_PRESENT: u32 = 300;
+    pub const PENDING_REMAINING_Q: u32 = 301;
+    pub const PENDING_HORIZON: u32 = 317;
+    pub const PENDING_CREATED_SLOT: u32 = 325;
 }
 
 // =============================================================================
@@ -228,15 +223,15 @@ pub mod margin_offsets {
 pub fn handler_body_top_up_insurance_fund() -> HandlerBody {
     let mut p = Program::new();
     // risk.insurance_fund += amount
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::INSURANCE_FUND);
+    p.emit_load_field(RISK_ACCT, risk_offsets::INSURANCE_FUND);
     p.emit_load_param(3);
     p.raw(ADD);
-    p.emit_store_field_u128(RISK_ACCT, risk_offsets::INSURANCE_FUND);
+    p.emit_store_field(RISK_ACCT, risk_offsets::INSURANCE_FUND);
     // risk.vault += amount
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::VAULT);
+    p.emit_load_field(RISK_ACCT, risk_offsets::VAULT);
     p.emit_load_param(3);
     p.raw(ADD);
-    p.emit_store_field_u128(RISK_ACCT, risk_offsets::VAULT);
+    p.emit_store_field(RISK_ACCT, risk_offsets::VAULT);
     // Status 0 → success.
     p.push_u64(0);
     p.raw(RETURN_VALUE);
@@ -271,7 +266,7 @@ pub fn handler_body_deposit() -> HandlerBody {
     let mut p = Program::new();
     // --- Vault capacity pre-check -------------------------------------------
     // risk.vault + amount > MAX_VAULT_TVL ⇒ abort with status 2.
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::VAULT);
+    p.emit_load_field(RISK_ACCT, risk_offsets::VAULT);
     p.emit_load_param(4);
     p.raw(ADD);
     p.push_u128(MAX_VAULT_TVL);
@@ -283,26 +278,26 @@ pub fn handler_body_deposit() -> HandlerBody {
 
     // --- Core mutations -----------------------------------------------------
     // acct.capital += amount
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::CAPITAL);
     p.emit_load_param(4);
     p.raw(ADD);
-    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_store_field(MARGIN_ACCT, margin_offsets::CAPITAL);
     // risk.vault += amount
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::VAULT);
+    p.emit_load_field(RISK_ACCT, risk_offsets::VAULT);
     p.emit_load_param(4);
     p.raw(ADD);
-    p.emit_store_field_u128(RISK_ACCT, risk_offsets::VAULT);
+    p.emit_store_field(RISK_ACCT, risk_offsets::VAULT);
     // risk.c_tot += amount
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::C_TOT);
+    p.emit_load_field(RISK_ACCT, risk_offsets::C_TOT);
     p.emit_load_param(4);
     p.raw(ADD);
-    p.emit_store_field_u128(RISK_ACCT, risk_offsets::C_TOT);
+    p.emit_store_field(RISK_ACCT, risk_offsets::C_TOT);
 
     // --- Flat-position fee-debt sweep --------------------------------------
     // if acct.position_basis_q == 0 && acct.pnl (bit-cast as i128) is
     // non-negative, zero acct.fee_credits. Non-negative check: sign bit of
     // the pnl's high u64 is 0.
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::POSITION_BASIS_Q);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::POSITION_BASIS_Q);
     p.push_u128(0);
     p.raw(EQ);
     let skip_sweep = p.emit_jump_if_not_placeholder_body_relative();
@@ -313,7 +308,7 @@ pub fn handler_body_deposit() -> HandlerBody {
     let skip_sweep_neg_pnl = p.emit_jump_if_placeholder_body_relative();
     // Sweep: fee_credits = 0.
     p.push_u128(0);
-    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::FEE_CREDITS);
+    p.emit_store_field(MARGIN_ACCT, margin_offsets::FEE_CREDITS);
     p.patch_jump_to_here_body_relative(skip_sweep_neg_pnl);
     p.patch_jump_to_here_body_relative(skip_sweep);
 
@@ -350,7 +345,7 @@ pub fn handler_body_withdraw() -> HandlerBody {
 
     // --- amount <= capital (step 4) -----------------------------------------
     p.emit_load_param(4);
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::CAPITAL);
     p.raw(five_protocol::opcodes::GT);
     let cap_sufficient = p.emit_jump_if_not_placeholder_body_relative();
     p.push_u64(3);
@@ -360,7 +355,7 @@ pub fn handler_body_withdraw() -> HandlerBody {
     // --- Dust guard (step 5) ------------------------------------------------
     // post_cap = capital - amount (u128 polymorphic SUB, safe post step 4).
     // If post_cap > 0 AND post_cap < min_initial_deposit → abort.
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::CAPITAL);
     p.emit_load_param(4);
     p.raw(SUB);
     p.raw(DUP);
@@ -369,7 +364,7 @@ pub fn handler_body_withdraw() -> HandlerBody {
     let post_cap_is_zero = p.emit_jump_if_placeholder_body_relative();
     // post_cap > 0: check >= min_initial_deposit.
     p.raw(DUP);
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::MIN_INITIAL_DEPOSIT);
+    p.emit_load_field(RISK_ACCT, risk_offsets::MIN_INITIAL_DEPOSIT);
     p.raw(five_protocol::opcodes::LT);
     let dust_ok = p.emit_jump_if_not_placeholder_body_relative();
     p.push_u64(4);
@@ -381,15 +376,15 @@ pub fn handler_body_withdraw() -> HandlerBody {
 
     // --- Free-collateral / IM check (step 6, simplified) --------------------
     // if position_basis_q != 0 && post_cap < risk.min_nonzero_im_req → abort.
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::POSITION_BASIS_Q);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::POSITION_BASIS_Q);
     p.push_u128(0);
     p.raw(EQ);
     let position_is_flat = p.emit_jump_if_placeholder_body_relative();
     // Non-flat: check post_cap vs min_nonzero_im_req.
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::CAPITAL);
     p.emit_load_param(4);
     p.raw(SUB);
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::MIN_NONZERO_IM_REQ);
+    p.emit_load_field(RISK_ACCT, risk_offsets::MIN_NONZERO_IM_REQ);
     p.raw(five_protocol::opcodes::LT);
     let collateral_ok = p.emit_jump_if_not_placeholder_body_relative();
     p.push_u64(5);
@@ -398,18 +393,18 @@ pub fn handler_body_withdraw() -> HandlerBody {
     p.patch_jump_to_here_body_relative(position_is_flat);
 
     // --- Core mutations -----------------------------------------------------
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::CAPITAL);
     p.emit_load_param(4);
     p.raw(SUB);
-    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::VAULT);
+    p.emit_store_field(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field(RISK_ACCT, risk_offsets::VAULT);
     p.emit_load_param(4);
     p.raw(SUB);
-    p.emit_store_field_u128(RISK_ACCT, risk_offsets::VAULT);
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::C_TOT);
+    p.emit_store_field(RISK_ACCT, risk_offsets::VAULT);
+    p.emit_load_field(RISK_ACCT, risk_offsets::C_TOT);
     p.emit_load_param(4);
     p.raw(SUB);
-    p.emit_store_field_u128(RISK_ACCT, risk_offsets::C_TOT);
+    p.emit_store_field(RISK_ACCT, risk_offsets::C_TOT);
 
     p.push_u64(0);
     p.raw(RETURN_VALUE);
@@ -426,15 +421,15 @@ pub fn handler_body_withdraw() -> HandlerBody {
 pub fn handler_body_convert_released_pnl() -> HandlerBody {
     let mut p = Program::new();
     // acct.reserved_pnl -= amount
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::RESERVED_PNL);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::RESERVED_PNL);
     p.emit_load_param(4);
     p.raw(SUB);
-    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::RESERVED_PNL);
+    p.emit_store_field(MARGIN_ACCT, margin_offsets::RESERVED_PNL);
     // acct.capital += amount
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::CAPITAL);
     p.emit_load_param(4);
     p.raw(ADD);
-    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_store_field(MARGIN_ACCT, margin_offsets::CAPITAL);
     p.push_u64(0);
     p.raw(RETURN_VALUE);
     HandlerBody::linear(p.into_body())
@@ -463,7 +458,7 @@ pub fn handler_body_close_account() -> HandlerBody {
     let mut jump_patches = vec![];
 
     // Guard: position_basis_q == 0.
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::POSITION_BASIS_Q);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::POSITION_BASIS_Q);
     p.push_u128(0);
     p.raw(EQ);
     let pos_ok = p.emit_jump_if_placeholder_body_relative();
@@ -473,7 +468,7 @@ pub fn handler_body_close_account() -> HandlerBody {
     p.patch_jump_to_here_body_relative(pos_ok);
 
     // Guard: reserved_pnl == 0.
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::RESERVED_PNL);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::RESERVED_PNL);
     p.push_u128(0);
     p.raw(EQ);
     let rpnl_ok = p.emit_jump_if_placeholder_body_relative();
@@ -483,7 +478,7 @@ pub fn handler_body_close_account() -> HandlerBody {
     p.patch_jump_to_here_body_relative(rpnl_ok);
 
     // Guard: fee_credits == 0 (polymorphic EQ handles i128 bit pattern).
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::FEE_CREDITS);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::FEE_CREDITS);
     p.push_u128(0);
     p.raw(EQ);
     let fc_ok = p.emit_jump_if_placeholder_body_relative();
@@ -494,25 +489,25 @@ pub fn handler_body_close_account() -> HandlerBody {
 
     // --- State transitions (unchanged from the Simplified scope) -----------
     // risk.vault -= acct.capital
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::VAULT);
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field(RISK_ACCT, risk_offsets::VAULT);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::CAPITAL);
     p.raw(SUB);
     // ... -= acct.reserved_pnl
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::RESERVED_PNL);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::RESERVED_PNL);
     p.raw(SUB);
-    p.emit_store_field_u128(RISK_ACCT, risk_offsets::VAULT);
+    p.emit_store_field(RISK_ACCT, risk_offsets::VAULT);
 
     // risk.c_tot -= acct.capital
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::C_TOT);
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field(RISK_ACCT, risk_offsets::C_TOT);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::CAPITAL);
     p.raw(SUB);
-    p.emit_store_field_u128(RISK_ACCT, risk_offsets::C_TOT);
+    p.emit_store_field(RISK_ACCT, risk_offsets::C_TOT);
 
     // risk.open_account_count -= 1 (u16 counter)
-    p.emit_load_field_u16(RISK_ACCT, risk_offsets::OPEN_ACCOUNT_COUNT);
+    p.emit_load_field(RISK_ACCT, risk_offsets::OPEN_ACCOUNT_COUNT);
     p.push_u64(1);
     p.raw(SUB);
-    p.emit_store_field_u16(RISK_ACCT, risk_offsets::OPEN_ACCOUNT_COUNT);
+    p.emit_store_field(RISK_ACCT, risk_offsets::OPEN_ACCOUNT_COUNT);
 
     // acct.capital = 0 (u128)
     p.push_u128(0);
@@ -590,57 +585,45 @@ pub fn handler_body_settle_account() -> HandlerBody {
 
     // risk.current_funding_rate_e9 = funding_rate_e9 (u128-encoded i128)
     p.emit_load_param(6);
-    p.emit_store_field_u128(RISK_ACCT, risk_offsets::CURRENT_FUNDING_RATE_E9);
+    p.emit_store_field(RISK_ACCT, risk_offsets::CURRENT_FUNDING_RATE_E9);
 
-    // --- cumulative_funding_e9 accrual (i256 ADD) ---------------------------
-    // Stack build-up order (b on top for ADD_I256 = a + b):
-    //   a = cumulative (4 limbs from limb_0..limb_3)
-    //   b = sign-extended i128 funding_rate_e9 (lo, hi, sext, sext)
+    // --- cumulative_funding_e9 accrual (u128 polymorphic ADD) --------------
+    // The pre-mono i256 accumulator (4× u64 limbs) collapses onto u128's low
+    // 16 bytes now that ADD_I256 is gone. Since the funding-rate opcode
+    // surface in mono removed wide-math, and polymorphic ADD on u128 wraps,
+    // we lose the i256 overflow headroom — but 2^128 nanounits at 1e9/s is
+    // still ~1e29 seconds of continuous accrual, so practical wrap is
+    // impossible. Limbs 2 and 3 of the declared layout stay zero.
+    //
+    // funding_rate_e9 (param 6) is already in the right u128 bit pattern
+    // for polymorphic ADD to handle as i128 two's-complement wrapping.
     p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0);
-    p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 8);
-    p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 16);
-    p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 24);
-
-    // Read the just-stored current_funding_rate_e9 back as two u64 halves so
-    // we can sign-extend to an i256. Re-reading (vs. splitting the param in
-    // place) avoids needing a new "narrow u128 to two u64s" opcode.
-    p.emit_load_field(RISK_ACCT, risk_offsets::CURRENT_FUNDING_RATE_E9); // lo
-    p.emit_load_field(RISK_ACCT, risk_offsets::CURRENT_FUNDING_RATE_E9 + 8); // hi
-
-    // sign_ext = hi >>a 63 (arithmetic right shift: 0 for positive, u64::MAX for negative)
-    p.raw(DUP);
-    p.push_u64(63);
-    p.raw(SHIFT_RIGHT_ARITH);
-    p.raw(DUP);
-    // Stack now: [cum0, cum1, cum2, cum3, lo, hi, sext, sext]
-
-    p.raw_bytes(&[ADD_I256, FLAG_WRAPPING_LOCAL]);
-    // Stack: [r0, r1, r2, r3]
-
-    // Store limbs back (top-of-stack is r3; STORE_FIELD pops).
-    p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 24);
-    p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 16);
-    p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 8);
+    p.emit_load_param(6);
+    p.push_u128(0); // type tag: forces u128 width at polymorphic dispatch
+    p.raw(ADD);     // funding_rate_e9 + 0 → u128 (no-op; type-promotes param)
+    p.raw(ADD);     // cumulative += funding_rate_e9 (u128)
     p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0);
 
-    // --- acct.f_snap = current_funding_rate_e9 (i128 copy) ------------------
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::CURRENT_FUNDING_RATE_E9);
-    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::F_SNAP);
+    // --- acct.f_snap = current_funding_rate_e9 (u128 copy) -----------------
+    p.emit_load_field(RISK_ACCT, risk_offsets::CURRENT_FUNDING_RATE_E9);
+    p.push_u128(0); // force u128-width polymorphic copy
+    p.raw(ADD);
+    p.emit_store_field(MARGIN_ACCT, margin_offsets::F_SNAP);
 
     // --- Flat-position PnL zero (branch) ------------------------------------
     // if acct.position_basis_q == 0:
     //     acct.pnl = 0
     //     acct.fee_credits = 0
     // Uses polymorphic EQ on the U128 ValueRef — EQ pushes 1 iff equal.
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::POSITION_BASIS_Q);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::POSITION_BASIS_Q);
     p.push_u128(0);
     p.raw(EQ);
     let skip_flat_zero = p.emit_jump_if_not_placeholder_body_relative();
     // Flat: zero pnl + fee_credits.
     p.push_u128(0);
-    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::PNL);
+    p.emit_store_field(MARGIN_ACCT, margin_offsets::PNL);
     p.push_u128(0);
-    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::FEE_CREDITS);
+    p.emit_store_field(MARGIN_ACCT, margin_offsets::FEE_CREDITS);
     p.patch_jump_to_here_body_relative(skip_flat_zero);
 
     // --- Fee sweep (branch) -------------------------------------------------
@@ -650,27 +633,27 @@ pub fn handler_body_settle_account() -> HandlerBody {
     //     acct.fee_credits += excess
     //
     // Polymorphic GT (0x25) handles u128 directly — pushes 1 iff capital > thr.
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::MIN_NONZERO_IM_REQ);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field(RISK_ACCT, risk_offsets::MIN_NONZERO_IM_REQ);
     p.raw(five_protocol::opcodes::GT);
     let skip_fee_sweep = p.emit_jump_if_not_placeholder_body_relative();
     // Fee-sweep branch:
     //   excess = capital - threshold (polymorphic u128 SUB; safe because the
     //   branch guard above proved capital > threshold)
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::MIN_NONZERO_IM_REQ);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field(RISK_ACCT, risk_offsets::MIN_NONZERO_IM_REQ);
     p.raw(SUB);
     // Stack: [excess]
     //   fee_credits += excess
     p.raw(DUP);
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::FEE_CREDITS);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::FEE_CREDITS);
     p.raw(ADD);
-    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::FEE_CREDITS);
+    p.emit_store_field(MARGIN_ACCT, margin_offsets::FEE_CREDITS);
     //   capital -= excess (equivalent to capital := threshold)
-    p.emit_load_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field(MARGIN_ACCT, margin_offsets::CAPITAL);
     p.raw(five_protocol::opcodes::SWAP);
     p.raw(SUB);
-    p.emit_store_field_u128(MARGIN_ACCT, margin_offsets::CAPITAL);
+    p.emit_store_field(MARGIN_ACCT, margin_offsets::CAPITAL);
     p.patch_jump_to_here_body_relative(skip_fee_sweep);
 
     // Status 0 → success.
@@ -717,16 +700,16 @@ pub fn handler_body_execute_trade() -> HandlerBody {
     const MAKER_ACCT: u8 = 3;
 
     // taker.position_basis_q += size_q_signed (i128 addition via generic ADD)
-    p.emit_load_field_u128(TAKER_ACCT, margin_offsets::POSITION_BASIS_Q);
+    p.emit_load_field(TAKER_ACCT, margin_offsets::POSITION_BASIS_Q);
     p.emit_load_param(6);
     p.raw(ADD);
-    p.emit_store_field_u128(TAKER_ACCT, margin_offsets::POSITION_BASIS_Q);
+    p.emit_store_field(TAKER_ACCT, margin_offsets::POSITION_BASIS_Q);
 
     // maker.position_basis_q -= size_q_signed
-    p.emit_load_field_u128(MAKER_ACCT, margin_offsets::POSITION_BASIS_Q);
+    p.emit_load_field(MAKER_ACCT, margin_offsets::POSITION_BASIS_Q);
     p.emit_load_param(6);
     p.raw(SUB);
-    p.emit_store_field_u128(MAKER_ACCT, margin_offsets::POSITION_BASIS_Q);
+    p.emit_store_field(MAKER_ACCT, margin_offsets::POSITION_BASIS_Q);
 
     // --- PnL accrual (i128 via polymorphic ADD/SUB) -------------------------
     // price_delta_signed = oracle_price - exec_price   (u64 polymorphic SUB;
@@ -739,24 +722,24 @@ pub fn handler_body_execute_trade() -> HandlerBody {
     // POS_SCALE invariants).
 
     // taker.pnl += (oracle - exec) * size_q_signed   (polymorphic i128)
-    p.emit_load_field_u128(TAKER_ACCT, margin_offsets::PNL);
+    p.emit_load_field(TAKER_ACCT, margin_offsets::PNL);
     p.emit_load_param(5); // oracle_price (u64)
     p.emit_load_param(7); // exec_price (u64)
     p.raw(SUB);           // price_delta (u64, wraps for negative deltas)
     p.emit_load_param(6); // size_q_signed (i128)
     p.raw(MUL);           // pnl_delta (i128, polymorphic promotes u64×i128)
     p.raw(ADD);           // taker.pnl += pnl_delta
-    p.emit_store_field_u128(TAKER_ACCT, margin_offsets::PNL);
+    p.emit_store_field(TAKER_ACCT, margin_offsets::PNL);
 
     // maker.pnl -= (oracle - exec) * size_q_signed
-    p.emit_load_field_u128(MAKER_ACCT, margin_offsets::PNL);
+    p.emit_load_field(MAKER_ACCT, margin_offsets::PNL);
     p.emit_load_param(5);
     p.emit_load_param(7);
     p.raw(SUB);
     p.emit_load_param(6);
     p.raw(MUL);
     p.raw(SUB);
-    p.emit_store_field_u128(MAKER_ACCT, margin_offsets::PNL);
+    p.emit_store_field(MAKER_ACCT, margin_offsets::PNL);
 
     // --- Trading fee collection --------------------------------------------
     // taker.fee_credits -= fee (fee is a positive u128 magnitude; the account
@@ -764,15 +747,15 @@ pub fn handler_body_execute_trade() -> HandlerBody {
     // Exact fee formula uses MULDIV u256 to preserve precision before dividing
     // by 10_000 and POS_SCALE; the trade's trading_fee_override (param 8) is a
     // pre-computed u64 that already folds the bps→absolute math.
-    p.emit_load_field_u128(TAKER_ACCT, margin_offsets::FEE_CREDITS);
+    p.emit_load_field(TAKER_ACCT, margin_offsets::FEE_CREDITS);
     p.emit_load_param(8);
     p.raw(SUB);
-    p.emit_store_field_u128(TAKER_ACCT, margin_offsets::FEE_CREDITS);
+    p.emit_store_field(TAKER_ACCT, margin_offsets::FEE_CREDITS);
 
-    p.emit_load_field_u128(MAKER_ACCT, margin_offsets::FEE_CREDITS);
+    p.emit_load_field(MAKER_ACCT, margin_offsets::FEE_CREDITS);
     p.emit_load_param(8);
     p.raw(ADD);
-    p.emit_store_field_u128(MAKER_ACCT, margin_offsets::FEE_CREDITS);
+    p.emit_store_field(MAKER_ACCT, margin_offsets::FEE_CREDITS);
 
     // --- OI-bound enforcement (post-trade, both sides) ---------------------
     // Spec §4.6 / percolator.rs:3303 gates the trade on
@@ -792,13 +775,13 @@ pub fn handler_body_execute_trade() -> HandlerBody {
         jump_patches.push(pos_non_negative);
         // Negative branch: magnitude = 0 - pos (u128 polymorphic SUB).
         p.push_u128(0);
-        p.emit_load_field_u128(account, margin_offsets::POSITION_BASIS_Q);
+        p.emit_load_field(account, margin_offsets::POSITION_BASIS_Q);
         p.raw(SUB);
         let jmp_to_cmp = p.emit_jump_placeholder_body_relative();
         jump_patches.push(jmp_to_cmp);
         // Positive branch: magnitude = pos as u128.
         p.patch_jump_to_here_body_relative(pos_non_negative);
-        p.emit_load_field_u128(account, margin_offsets::POSITION_BASIS_Q);
+        p.emit_load_field(account, margin_offsets::POSITION_BASIS_Q);
         // Join with u128 magnitude on top of stack.
         p.patch_jump_to_here_body_relative(jmp_to_cmp);
         // Compare vs MAX_POSITION_ABS_Q using polymorphic GT (opcode 0x25).
@@ -850,7 +833,7 @@ pub fn handler_body_liquidate_at_oracle() -> HandlerBody {
     // fee = victim.capital * liquidation_fee_bps / 10_000
     // The division is u128 polymorphic DIV (opcode 0x23). Leaves fee (u128)
     // on top of the stack after the polymorphic MUL → DIV chain.
-    p.emit_load_field_u128(VICTIM_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field(VICTIM_ACCT, margin_offsets::CAPITAL);
     p.emit_load_field(RISK_ACCT, risk_offsets::LIQUIDATION_FEE_BPS); // u64
     p.raw(MUL);
     p.push_u128(10_000);
@@ -863,13 +846,13 @@ pub fn handler_body_liquidate_at_oracle() -> HandlerBody {
     // unusually large liquidation. Done inline so the rest of this handler
     // can assume `fee` is already clamped.
     p.raw(DUP);
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::LIQUIDATION_FEE_CAP);
+    p.emit_load_field(RISK_ACCT, risk_offsets::LIQUIDATION_FEE_CAP);
     p.raw(five_protocol::opcodes::GT);
     // Stack: [fee_raw, (fee_raw > cap)]
     let fee_within_cap = p.emit_jump_if_not_placeholder_body_relative();
     // Over-cap branch: pop fee_raw, push cap (ignored the copy above).
     p.raw(five_protocol::opcodes::DROP);
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::LIQUIDATION_FEE_CAP);
+    p.emit_load_field(RISK_ACCT, risk_offsets::LIQUIDATION_FEE_CAP);
     p.patch_jump_to_here_body_relative(fee_within_cap);
     // Stack: [fee]  (either fee_raw itself, or cap, whichever was smaller)
 
@@ -879,10 +862,10 @@ pub fn handler_body_liquidate_at_oracle() -> HandlerBody {
     // Stack: [fee, fee]
 
     // risk.insurance_fund += fee
-    p.emit_load_field_u128(RISK_ACCT, risk_offsets::INSURANCE_FUND);
+    p.emit_load_field(RISK_ACCT, risk_offsets::INSURANCE_FUND);
     p.raw(SWAP_FOR_POLY);
     p.raw(ADD);
-    p.emit_store_field_u128(RISK_ACCT, risk_offsets::INSURANCE_FUND);
+    p.emit_store_field(RISK_ACCT, risk_offsets::INSURANCE_FUND);
     // Stack still has one fee on top.
 
     // liquidator.reserved_pnl += (victim.capital - fee + victim.reserved_pnl)
@@ -890,30 +873,30 @@ pub fn handler_body_liquidate_at_oracle() -> HandlerBody {
     // add (intermediate result = liquidator_pnl + capital), subtract the fee
     // sitting on top of the stack already (put it last via swap), then add
     // victim.reserved_pnl for completeness.
-    p.emit_load_field_u128(LIQUIDATOR_ACCT, margin_offsets::RESERVED_PNL);
-    p.emit_load_field_u128(VICTIM_ACCT, margin_offsets::CAPITAL);
+    p.emit_load_field(LIQUIDATOR_ACCT, margin_offsets::RESERVED_PNL);
+    p.emit_load_field(VICTIM_ACCT, margin_offsets::CAPITAL);
     p.raw(ADD);
     // Stack: [fee, liquidator_pnl + capital]  (fee is underneath — need swap)
     p.raw(SWAP_FOR_POLY);
     p.raw(SUB);
     // Stack: [liquidator_pnl + capital - fee]
-    p.emit_load_field_u128(VICTIM_ACCT, margin_offsets::RESERVED_PNL);
+    p.emit_load_field(VICTIM_ACCT, margin_offsets::RESERVED_PNL);
     p.raw(ADD);
-    p.emit_store_field_u128(LIQUIDATOR_ACCT, margin_offsets::RESERVED_PNL);
+    p.emit_store_field(LIQUIDATOR_ACCT, margin_offsets::RESERVED_PNL);
 
     // Zero out the victim's live-state fields.
     p.push_u128(0);
-    p.emit_store_field_u128(VICTIM_ACCT, margin_offsets::CAPITAL);
+    p.emit_store_field(VICTIM_ACCT, margin_offsets::CAPITAL);
     p.push_u128(0);
-    p.emit_store_field_u128(VICTIM_ACCT, margin_offsets::RESERVED_PNL);
+    p.emit_store_field(VICTIM_ACCT, margin_offsets::RESERVED_PNL);
     p.push_u128(0);
-    p.emit_store_field_u128(VICTIM_ACCT, margin_offsets::POSITION_BASIS_Q);
+    p.emit_store_field(VICTIM_ACCT, margin_offsets::POSITION_BASIS_Q);
 
     // Decrement open_account_count (the victim is effectively closed).
-    p.emit_load_field_u16(RISK_ACCT, risk_offsets::OPEN_ACCOUNT_COUNT);
+    p.emit_load_field(RISK_ACCT, risk_offsets::OPEN_ACCOUNT_COUNT);
     p.push_u64(1);
     p.raw(SUB);
-    p.emit_store_field_u16(RISK_ACCT, risk_offsets::OPEN_ACCOUNT_COUNT);
+    p.emit_store_field(RISK_ACCT, risk_offsets::OPEN_ACCOUNT_COUNT);
 
     // Status 0 → success.
     p.push_u64(0);
@@ -964,26 +947,16 @@ pub fn handler_body_keeper_crank() -> HandlerBody {
     p.raw(RETURN_VALUE);
     p.patch_jump_to_here_body_relative(monotonic_ok);
 
-    // --- Cumulative funding accrual (i256) ---------------------------------
-    // risk.cumulative_funding_e9 += sign_extended(funding_rate_e9)
-    // Stack: [cum_0, cum_1, cum_2, cum_3, lo, hi, sext, sext]
+    // --- Cumulative funding accrual (u128 polymorphic ADD) ----------------
+    // Same collapse as settle_account: 4-limb i256 → 16-byte u128.
+    // funding_rate_e9 (param 5) is already in the right u128 bit pattern
+    // for wrapping add; polymorphic ADD handles u128 width when either
+    // operand is U128.
     p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0);
-    p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 8);
-    p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 16);
-    p.emit_load_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 24);
-    // Read current_funding_rate_e9 back as two u64 halves (the DSL side just
-    // wrote it from funding_rate_e9 immediately before calling this body).
-    p.emit_load_field(RISK_ACCT, risk_offsets::CURRENT_FUNDING_RATE_E9);
-    p.emit_load_field(RISK_ACCT, risk_offsets::CURRENT_FUNDING_RATE_E9 + 8);
-    p.raw(DUP);
-    p.push_u64(63);
-    p.raw(SHIFT_RIGHT_ARITH);
-    p.raw(DUP);
-    p.raw_bytes(&[ADD_I256, FLAG_WRAPPING_LOCAL]);
-    // Store limbs back (top-down r3 → r0).
-    p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 24);
-    p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 16);
-    p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0 + 8);
+    p.emit_load_param(5);
+    p.push_u128(0);
+    p.raw(ADD);
+    p.raw(ADD);
     p.emit_store_field(RISK_ACCT, risk_offsets::CUMULATIVE_FUNDING_E9_LIMB_0);
 
     // --- last_crank_slot advance -------------------------------------------
