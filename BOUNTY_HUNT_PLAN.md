@@ -210,6 +210,57 @@ Hard rules apply. Do not file any external PR. Do not spend SOL. Stop and ask fo
 - Sanity-check probe (1000 runs against passing conformance) emits zero divergences
 - Branch `bounty/harness` pushed
 
+### Session 2 output
+
+**Run date:** 2026-05-12 (autonomous, branch `bounty/harness`, stacked on `bounty/recon`)
+
+**Branch reality:** plan said "off `port/mono`" but Session 2 needs to read `BOUNTY_HUNT_PLAN.md`'s Session 1 output, which only exists on `bounty/recon`. Branched off `bounty/recon` instead. Both branches still merge cleanly back to `port/mono` since neither touches conflicting code.
+
+**Files added / changed:**
+
+- `bench/Cargo.toml` — added litesvm 0.11 + split solana-{account,address,keypair,signer} crates + serde/clap/rand for the harness. Made `perc5ive` / `five-protocol` / `five-vm-mito` deps optional behind a `dsl_leg` feature (the DSL leg is Session 3 work; Session 2 only wires the Rust-reference and BPF legs). Added `legacy_u256` feature gating the pre-mono u256/i256 conformance modules whose symbols (`perc5ive::bytecode::u256::*`, `perc5ive::bytecode::i256::*`) were dropped during the mono port.
+- `bench/src/lib.rs` — re-exports `bounty_fuzz` module; pre-mono `arithmetic_conformance` + `anatoly_conformance` moved behind `legacy_u256`.
+- `bench/src/bounty_fuzz/mod.rs` — top-level exports.
+- `bench/src/bounty_fuzz/probe.rs` — `Probe` trait, `ProbeOutcome`, `Divergence`, `ImplLeg` types. `Divergence` carries stringified values so u128/i128/nested types serialize cleanly to JSONL.
+- `bench/src/bounty_fuzz/bpf_runner.rs` — `BpfRunner` wraps litesvm with `percolator-prog` pre-loaded at the canonical `Perco1ator…` program id, payer funded for 1000 SOL. Bridges `solana_pubkey::Pubkey` (from `Keypair::pubkey()`) to `solana_address::Address` (litesvm) via bytes since the split-crate world has them as different wrapper types.
+- `bench/src/bounty_fuzz/sanity.rs` — deterministic `mul_div_floor` probe routed through `percolator::wide_math::U256` twice for self-comparison. 1000 runs MUST emit zero divergences; any divergence means harness plumbing is broken (e.g. stringification, leg-pair mislabeling), not a real finding.
+- `bench/src/bounty_fuzz/targets.rs` — `Target` enum with the four Session 1 priorities (`T1Funding`, `T2Conservation`, `T3Margin`, `T4RiskBuffer`) plus `Sanity`. Stub probes return clean outcomes; Session 3 replaces them with adversarial payloads.
+- `bench/src/bin/bounty_fuzz.rs` — `clap`-based CLI: `--target`, `--probes`, `--seed`, `--out-dir`, `--require-bpf`. Streams `ProbeOutcome` JSONL to `bench/fuzz_results/<unix_ts>_<target>.jsonl`. `--require-bpf` exits with code 2 if the `.so` can't be loaded — useful guardrail before a long hunt so a missing `.so` isn't masqueraded as "0 divergences".
+- `bench/README.md` — operator-facing doc covering build steps, `PKG_CONFIG_PATH` for openssl-sys, runtime invocations, JSONL schema, and the Session 3 probe-implementation workflow.
+
+**Verified at HEAD:**
+
+```
+$ cd /home/marche/5iveVM/perc5ive/bench
+$ export PKG_CONFIG_PATH=/home/linuxbrew/.linuxbrew/lib/pkgconfig
+$ cargo test --lib bounty_fuzz
+test bounty_fuzz::targets::tests::all_targets_parse ... ok
+test bounty_fuzz::sanity::tests::sanity_probe_outcome_serializes_to_json ... ok
+test bounty_fuzz::targets::tests::stub_targets_emit_zero_divergences ... ok
+test bounty_fuzz::sanity::tests::sanity_probe_1000_zero_divergences ... ok
+test bounty_fuzz::targets::tests::sanity_target_runs_1000_with_zero_divergences ... ok
+test result: ok. 5 passed; 0 failed; ...
+
+$ cargo run --quiet --bin bounty_fuzz -- --target sanity --probes 1000 --seed 42
+bounty_fuzz: target=sanity probes=1000 divergences=0 dirty_probes=0 → fuzz_results/1778610918_sanity.jsonl
+
+$ cargo run --quiet --bin bounty_fuzz -- --target t1_funding --probes 10 --require-bpf
+bpf_runner: loaded ../hello_slab/percolator-prog/target/deploy/percolator_prog.so (568048 bytes)
+bounty_fuzz: target=t1_funding probes=10 divergences=0 dirty_probes=0 → fuzz_results/1778610927_t1_funding.jsonl
+```
+
+**Compiled BPF binary:** `hello_slab/percolator-prog/target/deploy/percolator_prog.so` — 568,048 bytes, built with `solana-cargo-build-sbf 3.1.12`, platform-tools v1.52, rustc 1.89.0. Two stack-frame warnings from BPF linker (`process_instruction` overwrites values in the frame) — these are emitted by the deployed binary too; not introduced by us.
+
+**Build constraints we hit and the resolutions:**
+
+- **`litesvm = "0.6"` fails to resolve** — transitive `solana-sdk-ids` pin conflicts between `solana-account 2.2.1` and `solana-address-lookup-table-interface 2.2.1`. Bumped to `0.11`.
+- **`solana-sdk = "2"` collides with `litesvm 0.11`'s `solana-account 3.4.0`** — different `Account` types in the dep graph. Dropped `solana-sdk` entirely, pulled split crates (`solana-account = "3"`, etc.) so versions match what litesvm carries.
+- **`Keypair::pubkey()` returns `solana_pubkey::Pubkey`, litesvm wants `solana_address::Address`** — same 32 bytes, different wrapper types. Bridged via `.to_bytes()` + `Address::new_from_array`.
+- **`perc5ive` (parent crate) `build.rs` needs `five_dsl_compiler`** — pulling the parent as a dep dragged the whole DSL toolchain into Session 2 and broke `cargo test`. Made `perc5ive` / `five-protocol` / `five-vm-mito` optional behind `dsl_leg`. Session 3 re-enables once it actually writes DSL probes.
+- **OpenSSL pkg-config not on PATH** — set `PKG_CONFIG_PATH=/home/linuxbrew/.linuxbrew/lib/pkgconfig` in invocations. Documented in `bench/README.md`.
+
+**Session 3 handoff:** the infrastructure is plumbed end-to-end. Real probe payloads land in `bench/src/bounty_fuzz/targets.rs` by replacing the `StubProbe` branches. The natural starting target is **T1 funding accrual** (Effort: M, Sev: M–H from Session 1 ranking) because it's a pure-function comparison (RustRef vs DSL legs only — no BPF leg needed for the engine helper itself), so probes can be written without the litesvm complexity. T2 (multi-instruction conservation) requires the BPF leg to be more than `BpfRunner::new` — instruction-builders for each public ix tag (DepositCollateral, TradeNoCpi, KeeperCrank, etc.), state-readers for the slab account, and a chosen public ix subset for the sequence generator. Plan to spend the first Session 3 hour on T1 to validate the probe pattern, then expand to T2-T4.
+
 ---
 
 ## Session 3 — Hunt

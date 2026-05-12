@@ -5,47 +5,31 @@
 //! bytecode-ported version, and compares the results bit-for-bit. A
 //! divergence in any property is a conformance failure.
 //!
-//! The suite is deliberately structured so each property is its own
-//! function — adding a new check is adding a new test, not threading state
-//! through an existing monolith.
+//! # Modules
 //!
-//! # What's covered as of 0.1.0
+//! * `bounty_fuzz` — three-way differential harness against the deployed
+//!   percolator-prog BPF wrapper. Built in bounty hunt Session 2.
 //!
-//! * **Arithmetic conformance** (`arithmetic_conformance` module) — every
-//!   `wide_math::U256` / `I256` / checked-op in Percolator has a matching
-//!   bytecode sequence in `perc5ive::bytecode::{u256, i256, i128}`, and
-//!   PercolatorBench runs a Rust reference against the bytecode sequence
-//!   for a curated set of probe values.
+//! * `field_access_conformance`, `handler_conformance` — documentation
+//!   modules tracking what the pre-mono port covered. The actual
+//!   round-trip tests live in the top-level `perc5ive/tests/` directory.
 //!
-//! * **Field-access conformance** (`field_access_conformance` module) — the
-//!   new sized-field opcodes (`LOAD/STORE_FIELD_{U128,U16}`) round-trip
-//!   cleanly through the VM against real `pinocchio::AccountInfo`.
-//!
-//! * **Handler state-transition conformance** (`handler_conformance`
-//!   module) — each ported handler's bytecode produces the same post-state
-//!   as calling Percolator's Rust reference with the same pre-state. For
-//!   the 0.1.0 cut, this is the simplified subset currently implemented
-//!   (top_up, deposit, withdraw, convert_released_pnl, close, settle,
-//!   execute_trade, liquidate_at_oracle, keeper_crank).
-//!
-//! # What's NOT covered
-//!
-//! * Full 116-property Kani-proof coverage — the 5ive stack has no Kani
-//!   yet. We use behavioral conformance (oracle-vs-bytecode) instead.
-//! * u256/i256 wide_math ops that the VM doesn't expose yet
-//!   (MULDIV_REM_U256, wide_signed_mul_div_floor) — tracked as
-//!   deferred-ops in `perc5ive::bytecode::i256`.
-//!
-//! The suite grows incrementally. Adding a new conformance property is
-//! adding a new `#[test]` plus, if needed, a Rust reference in the
-//! corresponding perc5ive `bytecode::*` module.
+//! * `anatoly_conformance`, `arithmetic_conformance` (legacy, behind
+//!   `legacy_u256` feature) — pre-mono u256/i256/i128 bytecode conformance
+//!   tests. The mono port dropped those multiprecision opcodes; these
+//!   modules are retained for historical reference and re-enabled only if
+//!   the multiprecision DSL surface is re-introduced.
 
 #![allow(clippy::unreadable_literal)]
 
-pub mod anatoly_conformance;
-pub mod arithmetic_conformance;
+pub mod bounty_fuzz;
 pub mod field_access_conformance;
 pub mod handler_conformance;
+
+#[cfg(feature = "legacy_u256")]
+pub mod anatoly_conformance;
+#[cfg(feature = "legacy_u256")]
+pub mod arithmetic_conformance;
 
 /// Summary of a conformance run — pass count, fail count, and the list of
 /// failing property names.
