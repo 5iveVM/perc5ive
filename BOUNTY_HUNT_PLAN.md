@@ -312,6 +312,50 @@ Hard rules apply. Do not file any external PR. Do not spend SOL. Especially: do 
 - Each surviving candidate has been checked against Jelleo + closed PRs
 - Branch `bounty/hunt` pushed
 
+### Session 3 output
+
+**Run date:** 2026-05-12. Branch: `bounty/hunt` off `bounty/harness`.
+
+**Probes implemented** (replacing Session 2 stubs):
+
+- `T1FundingProbe` (`bench/src/bounty_fuzz/t1_funding.rs`) — chains `accrue_market_to(slot, oracle, rate_e9)` calls with adversarial `(dt, oracle, rate)` triples drawn from XorShift PRNG, capped at the engine's `max_accrual_dt_slots` / `max_abs_funding_e9_per_slot`. Checks residual `R = vault - c_tot - insurance` (saturated at 0) for any non-zero delta. Engine-direct only — DSL leg unavailable post-mono.
+- `T2ConservationProbe` (`bench/src/bounty_fuzz/t2_conservation.rs`) — picks random ops from `{Deposit, TopUpInsurance, Accrue, AbsorbProtocolLoss, SettleFlatNegativeNotAtomic, DepositFeeCredits, SyncAccountFee}` (Withdraw skipped — 3-arg signature complexity) and applies them in 10–39 step sequences. Checks (1) `R` conservation, (2) `insurance_fund.balance` decrease only on authorized ops.
+- `T3MarginProbe` / `T4RiskBufferProbe` — remain stubbed. T3 has no separate impl to differ against post-mono (DSL dropped multiprecision opcodes; pure-Rust self-comparison is useless). T4 needs BPF instruction-builders for `RiskBuffer::upsert` paths that Session 2 didn't implement.
+
+**One harness bug found and fixed during Session 3:** initial T2 invariant was `engine.check_conservation()` which only enforces senior solvency (`vault >= c_tot + insurance`). That invariant is WEAKER than Jelleo's `R = vault - c_tot - insurance` conservation — the F01/F03/F04 bug increases `R` (drains insurance without debiting vault) but doesn't violate senior solvency. Switched to direct `R` delta tracking. After the fix the probe started firing on every `absorb_protocol_loss` call as expected.
+
+**Run results:**
+
+| Target | Probes | Divergences | Dirty | Notes |
+| --- | --- | --- | --- | --- |
+| `sanity` | 1000 | 0 | 0 | harness plumbing OK |
+| `t1_funding` | 2000 (two 1000-probe seeds) | 0 | 0 | `accrue_market_to` is `R`-conservative as designed; doesn't reach Jelleo F10 (cross-instruction race) — that probe shape isn't implemented |
+| `t2_conservation` | 50_000 | 143_435 | 46_502 | every divergence cluster is `op=absorb_protocol_loss`, `delta_R > 0`, `vault unchanged`, `insurance dropped` |
+
+**Cluster analysis:** all 143_435 T2 divergences come from a single op (`absorb_protocol_loss`) and a single state pattern (vault unchanged, insurance decreased, R inflated). Every example matches Jelleo's F01/F03/F04/F05/F06/F08 trace exactly. The root cause is `use_insurance_buffer` at `hello_slab/percolator/src/percolator.rs:4827-4836` debiting `insurance_fund.balance` without an equal-magnitude debit on `vault`.
+
+**Disqualification pass (per Hard rule §5):**
+
+- v12.17 → v12.19 spec change? No (engine code, not spec drift).
+- Within rounding tolerance? No (delta in hundreds to millions of base units).
+- DSL-port-only state? No (engine-direct).
+- Matches Jelleo finding? **Yes** — F01, F03, F04, F05, F06, F08.
+- Matches closed PR? Partial — PR #1 fixed the same pattern in `WithdrawInsurance`; PR #39, #48 document live mainnet variants of the broader class.
+
+**Surviving novel candidates: ZERO.** Full triage in `CANDIDATES.md`.
+
+**Verdict — Pivot C selected (acknowledge the harness is complete; do not force a Session 4):**
+
+Three pivots were considered (full analysis in `CANDIDATES.md`):
+
+- **Pivot A** — build BPF instruction-builders so T4 (RiskBuffer wrapper-only state, the one class Jelleo can't reach) becomes hunt-able. Effort: L (Session-4-sized work). EV: H given PR #91's "three root causes" wording leaves a fourth-cause hypothesis structurally open. Worth doing in a future session.
+- **Pivot B** — cross-instruction state races beyond Jelleo F10 (T1 mark-cap bundle). Effort: M, EV: M — PR #56 (codex wrapper-boundary proofs) likely closed many of these already.
+- **Pivot C** — accept that the deployed binary's engine == Jelleo's audit target, and Jelleo's 20 findings cover the engine-direct bug surface. Our toolkit gave no new view. Bank `bench/src/bounty_fuzz/` as reusable infrastructure for future percolator releases and stop the cycle.
+
+Pivot C is selected because the hard rule §5 honesty bar is non-negotiable — Jelleo overlap disqualifies everything we found, and we have no concrete bug to file. Pivot A is queued for "if we choose to invest another session." Session 4 in its current "validate paranoid mode" form has no candidates to validate; the prompt below should be rewritten before any future invocation.
+
+**Session 4 handoff (one paragraph):** Don't run Session 4 as written — there are no surviving candidates to validate, so the `Layer 1/2/3/4` paranoid validation pipeline has no input. Instead, the next session (if any) should be a Session-3-redo against Pivot A: extend `bench/src/bounty_fuzz/bpf_runner.rs` with instruction-builders for `KeeperCrank` (tag 9), `DepositCollateral` (tag 1), and the candidate-bearing crank path that PR #91 touched, then write `t4_riskbuffer.rs` probes that fuzz the `RiskBuffer::upsert` admission/eviction sequence checking the invariant "no admission sequence locks a victim with `notional > current min_notional` from entering the buffer." That is the one bug-class corner where novelty is structurally plausible (PR #91 closed only three named root causes; a fourth in the same class would be in-scope). Until that infrastructure exists or a different hypothesis surfaces, the harness sits idle and the recon/audit artifacts (`hello_slab/jelleo_findings.md`, `hello_slab/prog_pr_history.json`, `CANDIDATES.md`) are the record of what we did.
+
 ---
 
 ## Session 4 — Validate (paranoid mode)

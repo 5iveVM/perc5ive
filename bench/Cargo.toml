@@ -21,7 +21,11 @@ dsl_leg = ["dep:perc5ive", "dep:five-protocol", "dep:five-vm-mito"]
 
 [dependencies]
 # Rust reference engine — the (a) leg of the three-way differential.
-percolator = { path = "../hello_slab/percolator" }
+# `test` feature exposes `test_visible!` helpers (absorb_protocol_loss,
+# settle_flat_negative_pnl_not_atomic, materialize_at, check_conservation,
+# new_with_market) that Session 3 probes invoke directly. Same feature
+# Jelleo's audit harnesses enable.
+percolator = { path = "../hello_slab/percolator", features = ["test"] }
 
 # Bounty-hunt differential harness dependencies.
 serde = { version = "1", features = ["derive"] }

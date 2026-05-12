@@ -14,6 +14,8 @@
 pub mod bpf_runner;
 pub mod probe;
 pub mod sanity;
+pub mod t1_funding;
+pub mod t2_conservation;
 pub mod targets;
 
 pub use bpf_runner::{BpfRunner, BpfRunnerError};

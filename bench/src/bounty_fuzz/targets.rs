@@ -20,6 +20,8 @@ use std::str::FromStr;
 
 use crate::bounty_fuzz::probe::{Probe, ProbeOutcome};
 use crate::bounty_fuzz::sanity::SanityProbe;
+use crate::bounty_fuzz::t1_funding::T1FundingProbe;
+use crate::bounty_fuzz::t2_conservation::T2ConservationProbe;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
@@ -93,10 +95,23 @@ pub fn run_target(target: Target, n: u64, seed: u64) -> Vec<ProbeOutcome> {
                 outcomes.push(probe.run(i, seed));
             }
         }
-        Target::T1Funding
-        | Target::T2Conservation
-        | Target::T3Margin
-        | Target::T4RiskBuffer => {
+        Target::T1Funding => {
+            let mut probe = T1FundingProbe::with_seed(seed);
+            for i in 0..n {
+                outcomes.push(probe.run(i, seed));
+            }
+        }
+        Target::T2Conservation => {
+            let mut probe = T2ConservationProbe::with_seed(seed);
+            for i in 0..n {
+                outcomes.push(probe.run(i, seed));
+            }
+        }
+        Target::T3Margin | Target::T4RiskBuffer => {
+            // T3 has no separate-impl to differ against post-mono (DSL
+            // dropped the multiprecision K-pair helper); T4 needs BPF
+            // instruction-builders that Session 2 didn't implement. Both
+            // remain stubs in Session 3.
             let mut probe = StubProbe {
                 target: target.as_str(),
             };
@@ -126,12 +141,8 @@ mod tests {
 
     #[test]
     fn stub_targets_emit_zero_divergences() {
-        for t in [
-            Target::T1Funding,
-            Target::T2Conservation,
-            Target::T3Margin,
-            Target::T4RiskBuffer,
-        ] {
+        // T1/T2 are now real probes; T3/T4 stay stubbed pending Session 4.
+        for t in [Target::T3Margin, Target::T4RiskBuffer] {
             let outcomes = run_target(t, 100, 0xABCD);
             assert_eq!(outcomes.len(), 100);
             assert!(outcomes.iter().all(|o| o.is_clean()));
