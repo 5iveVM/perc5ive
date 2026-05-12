@@ -38,7 +38,11 @@
 //!   does, but that analyzer is not on the runtime path.
 
 use super::emit::CallPatch;
-use five_protocol::opcodes::{CALL, NOP, PUSH_U64, RETURN_VALUE};
+use five_protocol::opcodes::{CALL, JUMP, NOP, PUSH_U64, PUSH_U64_W, RETURN_VALUE};
+use five_protocol::{
+    FEATURE_CONSTANT_POOL, FEATURE_FUNCTION_NAMES, FEATURE_PUBLIC_ENTRY_TABLE,
+    SCRIPT_BYTECODE_HEADER_V1_SIZE,
+};
 
 /// Mutable working buffer for an in-progress link.
 pub struct Linker {
@@ -184,48 +188,232 @@ impl Linker {
     // ------------------------------------------------------------------------
 
     /// Compute the exact byte sequence that `five-dsl-compiler` emits for the
-    /// stub body `return <sentinel>;`. Mono uses fixed-width encoding: the
-    /// sentinel is 8 LE bytes after the opcode.
-    fn stub_pattern(sentinel: u64) -> Vec<u8> {
+    /// inline `return <sentinel>;` form: `PUSH_U64 <8 LE> RETURN_VALUE` =
+    /// 10 bytes. Used when the binary's `FEATURE_CONSTANT_POOL` bit is *off*
+    /// or when the sentinel didn't make it into the pool (small values
+    /// usually inline; the compiler emits the wide pool-backed `PUSH_U64_W`
+    /// form for u64 literals whose encoded size makes inlining worse).
+    fn inline_stub_pattern(sentinel: u64) -> Vec<u8> {
         let mut bytes = vec![PUSH_U64];
         bytes.extend_from_slice(&sentinel.to_le_bytes());
         bytes.push(RETURN_VALUE);
         bytes
     }
 
-    /// Locate the unique offset of the stub body for the given sentinel.
+    /// Compute the exact byte sequence for the pool-backed `return <sentinel>;`
+    /// form. Mono's `PUSH_U64` (0x1B) opcode is polymorphic on the pool
+    /// feature flag: with the pool enabled the operand is a u8 pool index,
+    /// without it the operand is 8 LE bytes of the literal value. We
+    /// produce the *compact-u8* pool form here: `PUSH_U64 <u8 idx>
+    /// RETURN_VALUE` = 3 bytes. Used when the constant pool exists and the
+    /// sentinel slot fits in a u8 (i.e. there are ≤ 256 pool slots).
+    fn pool_stub_pattern_u8(pool_idx: u8) -> [u8; 3] {
+        [PUSH_U64, pool_idx, RETURN_VALUE]
+    }
+
+    /// Wider pool-backed form: `PUSH_U64_W <u16 idx LE> RETURN_VALUE` =
+    /// 4 bytes. Emitted by the compiler when the pool index doesn't fit in
+    /// a u8 (≥ 256 slots), and accepted by the VM regardless of feature
+    /// flag because the opcode itself encodes pool semantics.
+    fn pool_stub_pattern_u16(pool_idx: u16) -> [u8; 4] {
+        let idx = pool_idx.to_le_bytes();
+        [PUSH_U64_W, idx[0], idx[1], RETURN_VALUE]
+    }
+
+    /// Backwards-compatible accessor returning the *inline* stub pattern.
+    /// Kept for the existing unit tests that hand-roll an inline binary
+    /// without a constant pool. New code should use the typed forms above.
+    #[doc(hidden)]
+    pub fn stub_pattern(sentinel: u64) -> Vec<u8> {
+        Self::inline_stub_pattern(sentinel)
+    }
+
+    /// Parse the script header to find `(pool_offset, pool_slots)` if a
+    /// constant pool is present. Returns `None` if the binary doesn't have
+    /// `FEATURE_CONSTANT_POOL` set (or the header doesn't parse) — the
+    /// caller falls back to the inline pattern in that case.
     ///
-    /// Returns `None` if the pattern is not present, and `Err(StubFindError::Ambiguous)`
-    /// if it appears more than once (a sentinel collision — pick a less common
-    /// constant).
-    pub fn find_stub(&self, sentinel: u64) -> Result<Option<usize>, StubFindError> {
-        let needle = Self::stub_pattern(sentinel);
-        let mut found: Option<usize> = None;
-        if needle.len() > self.binary.len() {
-            return Ok(None);
+    /// Mirrors the offset walk in `five_protocol::parser::parse_code_bounds`
+    /// so the linker can find the `ConstantPoolDescriptor` directly. The
+    /// descriptor type itself is `pub(crate)` upstream; we read its 14
+    /// public bytes by hand (u32 pool_offset, u32 string_offset,
+    /// u32 string_len, u16 pool_slots) and discard the reserved tail.
+    fn parse_pool_window(binary: &[u8]) -> Option<(usize, u16)> {
+        if binary.len() < SCRIPT_BYTECODE_HEADER_V1_SIZE {
+            return None;
         }
-        for window_start in 0..=self.binary.len() - needle.len() {
-            if &self.binary[window_start..window_start + needle.len()] == &needle[..] {
+        let features = u32::from_le_bytes([binary[4], binary[5], binary[6], binary[7]]);
+        if features & FEATURE_CONSTANT_POOL == 0 {
+            return None;
+        }
+
+        let mut offset = SCRIPT_BYTECODE_HEADER_V1_SIZE;
+
+        // FEATURE_FUNCTION_NAMES adds a 2-byte size prefix + names blob.
+        if features & FEATURE_FUNCTION_NAMES != 0 {
+            if offset + 2 > binary.len() {
+                return None;
+            }
+            let section_size =
+                u16::from_le_bytes([binary[offset], binary[offset + 1]]) as usize;
+            offset = offset.checked_add(2)?.checked_add(section_size)?;
+        }
+
+        // FEATURE_PUBLIC_ENTRY_TABLE adds another 2-byte size prefix + table.
+        if features & FEATURE_PUBLIC_ENTRY_TABLE != 0 {
+            if offset + 2 > binary.len() {
+                return None;
+            }
+            let section_size =
+                u16::from_le_bytes([binary[offset], binary[offset + 1]]) as usize;
+            offset = offset.checked_add(2)?.checked_add(section_size)?;
+        }
+
+        // ConstantPoolDescriptor: u32 pool_offset (0..4), u32 string_offset
+        // (4..8), u32 string_len (8..12), u16 pool_slots (12..14), u16
+        // reserved (14..16). 16 bytes total.
+        if offset + 14 > binary.len() {
+            return None;
+        }
+        let pool_offset = u32::from_le_bytes([
+            binary[offset],
+            binary[offset + 1],
+            binary[offset + 2],
+            binary[offset + 3],
+        ]) as usize;
+        let pool_slots = u16::from_le_bytes([binary[offset + 12], binary[offset + 13]]);
+        Some((pool_offset, pool_slots))
+    }
+
+    /// Linear scan of the constant pool for a u64 value, returning its slot
+    /// index. Slots are 8 bytes each, little-endian. Returns `None` if the
+    /// sentinel is absent (the compiler chose the inline form for it).
+    fn find_pool_slot(binary: &[u8], sentinel: u64) -> Option<u16> {
+        let (pool_offset, pool_slots) = Self::parse_pool_window(binary)?;
+        let needle = sentinel.to_le_bytes();
+        for i in 0..(pool_slots as usize) {
+            let start = pool_offset + i * 8;
+            if start + 8 > binary.len() {
+                return None;
+            }
+            if binary[start..start + 8] == needle {
+                return Some(i as u16);
+            }
+        }
+        None
+    }
+
+    /// Locate the unique offset of the stub body for `sentinel`. Tries the
+    /// two pool-backed forms first (mono-default for u64 literals when
+    /// `FEATURE_CONSTANT_POOL` is set), then falls back to the inline form.
+    /// Returns `None` if none match.
+    ///
+    /// `Err(StubFindError::Ambiguous)` is reserved for *more than one form
+    /// matching* or *any form matching more than once* — pick a less
+    /// common sentinel.
+    pub fn find_stub(&self, sentinel: u64) -> Result<Option<usize>, StubFindError> {
+        let mut found: Option<usize> = None;
+
+        if let Some(pool_idx) = Self::find_pool_slot(&self.binary, sentinel) {
+            // Pool-backed compact form: `PUSH_U64 <u8 idx> RETURN_VALUE`
+            // = 3 bytes. Compiler picks this when the pool index fits a
+            // u8 (which is the common case — pools rarely exceed 256
+            // slots in practice).
+            if pool_idx <= u8::MAX as u16 {
+                let needle = Self::pool_stub_pattern_u8(pool_idx as u8);
+                for window_start in self.scan_for_pattern(&needle) {
+                    if found.is_some() {
+                        return Err(StubFindError::Ambiguous);
+                    }
+                    found = Some(window_start);
+                }
+            }
+
+            // Pool-backed wide form: `PUSH_U64_W <u16 idx LE> RETURN_VALUE`
+            // = 4 bytes. Used when the pool index doesn't fit a u8.
+            let needle_w = Self::pool_stub_pattern_u16(pool_idx);
+            for window_start in self.scan_for_pattern(&needle_w) {
                 if found.is_some() {
                     return Err(StubFindError::Ambiguous);
                 }
                 found = Some(window_start);
             }
         }
+
+        // Inline: 10-byte `PUSH_U64 <8 LE> RETURN_VALUE`. Used when the
+        // pool isn't enabled at all (legacy / hand-rolled test binaries).
+        let inline = Self::inline_stub_pattern(sentinel);
+        for window_start in self.scan_for_pattern(&inline) {
+            if found.is_some() {
+                return Err(StubFindError::Ambiguous);
+            }
+            found = Some(window_start);
+        }
+
         Ok(found)
     }
 
-    /// Rewrite a stub body in-place: replace its `PUSH_U64 sentinel; RETURN_VALUE`
-    /// sequence with `CALL 0 <appended target>; RETURN_VALUE; NOP*` so the
-    /// containing function calls into the appended hand-written bytecode and
-    /// then returns. The slot's byte length is preserved so all other CALL
-    /// targets in the base binary remain valid.
+    /// Internal helper: scan `self.binary` for every occurrence of `needle`.
+    /// Returns an iterator-like Vec because find_stub needs to count matches
+    /// across two patterns; a real iterator would borrow self.
+    fn scan_for_pattern(&self, needle: &[u8]) -> Vec<usize> {
+        let mut hits = Vec::new();
+        if needle.is_empty() || needle.len() > self.binary.len() {
+            return hits;
+        }
+        for window_start in 0..=self.binary.len() - needle.len() {
+            if &self.binary[window_start..window_start + needle.len()] == needle {
+                hits.push(window_start);
+            }
+        }
+        hits
+    }
+
+    /// Identify which stub form lives at `offset` (must point at a `PUSH_U64`
+    /// or `PUSH_U64_W` opcode). Returned length is the slot size we must
+    /// preserve when rewriting. The pool-compact and inline forms share an
+    /// opcode (`PUSH_U64`); the binary's `FEATURE_CONSTANT_POOL` bit
+    /// disambiguates them.
+    fn stub_form_at(&self, offset: usize) -> Option<StubForm> {
+        let opcode = *self.binary.get(offset)?;
+        let pool_active = Self::parse_pool_window(&self.binary).is_some();
+        match opcode {
+            PUSH_U64 if pool_active
+                && offset + 3 <= self.binary.len()
+                && self.binary[offset + 2] == RETURN_VALUE =>
+            {
+                // Compact pool form: 0x1B <u8 idx> 0x07 = 3 bytes.
+                Some(StubForm::PoolBackedU8 { len: 3 })
+            }
+            PUSH_U64 if !pool_active
+                && offset + 10 <= self.binary.len()
+                && self.binary[offset + 9] == RETURN_VALUE =>
+            {
+                Some(StubForm::Inline { len: 10 })
+            }
+            PUSH_U64_W if offset + 4 <= self.binary.len()
+                && self.binary[offset + 3] == RETURN_VALUE =>
+            {
+                Some(StubForm::PoolBackedU16 { len: 4 })
+            }
+            _ => None,
+        }
+    }
+
+    /// Rewrite a stub body in-place. The 10-byte inline form is replaced by
+    /// `CALL 0 <target_le> RETURN_VALUE` + NOP padding so the appended body
+    /// is called as a sub-function and control returns to the stub for its
+    /// own RETURN_VALUE.
     ///
-    /// `param_count = 0` is intentional: the appended bytecode runs on the
-    /// caller's value stack directly. If you need the DSL stub to first
-    /// arrange operands on the value stack, do so via a richer stub body
-    /// (and a correspondingly larger sentinel slot to overwrite) — the
-    /// shape this should take will be decided when wired up to the DSL.
+    /// The 4-byte pool-backed form is replaced by `JUMP <target_le>` + one
+    /// NOP — control transfers directly to the appended body, whose terminal
+    /// `RETURN_VALUE` returns from the STUB's frame (still on the call stack
+    /// from the outer caller's CALL). Frame counting stays balanced because
+    /// JUMP does not push a new frame; the single RETURN_VALUE pops the
+    /// stub's frame as expected.
+    ///
+    /// `param_count = 0` is intentional for the CALL path: the appended
+    /// bytecode runs on the caller's value stack directly.
     pub fn rewrite_stub(
         &mut self,
         sentinel: u64,
@@ -234,27 +422,58 @@ impl Linker {
         let stub_offset = self
             .find_stub(sentinel)?
             .ok_or(StubFindError::NotFound)?;
-        let pattern_len = Self::stub_pattern(sentinel).len();
-        // New body: CALL 0 target_lo target_hi RETURN_VALUE [NOP...]
-        let mut new_body = Vec::with_capacity(pattern_len);
-        new_body.push(CALL);
-        new_body.push(0); // param_count
-        let bytes = target.offset.to_le_bytes();
-        new_body.push(bytes[0]);
-        new_body.push(bytes[1]);
-        new_body.push(RETURN_VALUE);
-        if new_body.len() > pattern_len {
-            // Should not happen with a typical sentinel — only triggers if
-            // the sentinel VLE-encodes to fewer than ~3 bytes and the stub
-            // body shrinks below 5 bytes total. Pick a larger sentinel.
-            return Err(StubFindError::PatternTooSmall);
+        let form = self
+            .stub_form_at(stub_offset)
+            .ok_or(StubFindError::NotFound)?;
+
+        let target_le = target.offset.to_le_bytes();
+
+        match form {
+            StubForm::Inline { len } => {
+                // CALL 0 target_lo target_hi RETURN_VALUE [NOP...] = 5 + padding
+                let mut new_body = vec![CALL, 0, target_le[0], target_le[1], RETURN_VALUE];
+                if new_body.len() > len {
+                    return Err(StubFindError::PatternTooSmall);
+                }
+                while new_body.len() < len {
+                    new_body.push(NOP);
+                }
+                self.binary[stub_offset..stub_offset + len].copy_from_slice(&new_body);
+            }
+            StubForm::PoolBackedU8 { len } => {
+                // JUMP target_lo target_hi = 3 bytes, exact fit. The
+                // appended body's RETURN_VALUE returns from the stub frame
+                // (still on the call stack from the outer caller's CALL),
+                // so frame counting stays balanced.
+                let new_body = [JUMP, target_le[0], target_le[1]];
+                debug_assert_eq!(new_body.len(), len);
+                self.binary[stub_offset..stub_offset + len].copy_from_slice(&new_body);
+            }
+            StubForm::PoolBackedU16 { len } => {
+                // JUMP target_lo target_hi NOP = 4 bytes, exact fit.
+                let new_body = [JUMP, target_le[0], target_le[1], NOP];
+                debug_assert_eq!(new_body.len(), len);
+                self.binary[stub_offset..stub_offset + len].copy_from_slice(&new_body);
+            }
         }
-        while new_body.len() < pattern_len {
-            new_body.push(NOP);
-        }
-        self.binary[stub_offset..stub_offset + pattern_len].copy_from_slice(&new_body);
         Ok(())
     }
+}
+
+/// Internal: which encoding form a sentinel stub uses. Each form has its
+/// own slot length so the rewriter picks a same-length replacement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StubForm {
+    /// `PUSH_U64 <8 LE> RETURN_VALUE` = 10 bytes. Used when the constant
+    /// pool feature is disabled (legacy / hand-rolled test binaries).
+    Inline { len: usize },
+    /// `PUSH_U64 <u8 idx> RETURN_VALUE` = 3 bytes. Polymorphic-PUSH_U64 in
+    /// pool-enabled mode reads a u8 pool index. This is the form mono's
+    /// compiler emits for pooled u64 literals.
+    PoolBackedU8 { len: usize },
+    /// `PUSH_U64_W <u16 idx LE> RETURN_VALUE` = 4 bytes. Emitted when the
+    /// pool index exceeds u8 range.
+    PoolBackedU16 { len: usize },
 }
 
 /// Errors returned when locating or rewriting a sentinel stub.
