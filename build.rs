@@ -10,6 +10,7 @@ use five_dsl_compiler::DslCompiler;
 /// builds.
 const DSL_SOURCES: &[(&str, &str, bool)] = &[
     ("dsl/src/main.v", "target/perc5ive.fbin", true),
+    ("meta/src/main.v", "target/meta.fbin", true),
     ("markets/sov/src/main.v", "target/sov.fbin", true),
     ("markets/pyth_race/src/main.v", "target/pyth_race.fbin", true),
     ("markets/lp_perp/src/main.v", "target/lp_perp.fbin", true),
