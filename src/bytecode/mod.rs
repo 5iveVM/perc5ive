@@ -13,6 +13,8 @@ pub mod dsl_header;
 pub mod emit;
 pub mod handlers;
 pub mod link;
+pub mod meta_handlers;
+pub mod meta_math;
 
 pub use emit::Program;
 pub use link::{AppendedFn, Linker};

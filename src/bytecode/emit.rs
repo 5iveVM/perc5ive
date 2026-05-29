@@ -190,6 +190,62 @@ impl Program {
     }
 
     // ------------------------------------------------------------------------
+    // Locals — ALLOC_LOCALS / SET_LOCAL / GET_LOCAL
+    //
+    // Locals live in a store separate from the value stack. `ALLOC_LOCALS n`
+    // reserves `n` slots for the current frame; SET/GET move values between a
+    // slot and the stack top. Used by branchy handlers (e.g. the genesis
+    // vote-weight log2 loop) that need to stash intermediates across jumps.
+    // ------------------------------------------------------------------------
+
+    /// Emit `ALLOC_LOCALS count`.
+    pub fn emit_alloc_locals(&mut self, count: u8) -> &mut Self {
+        self.body.push(ALLOC_LOCALS);
+        self.body.push(count);
+        self
+    }
+
+    /// Emit `SET_LOCAL idx` (pops stack top into local slot `idx`). Uses the
+    /// single-byte fast paths `SET_LOCAL_0..3` when possible.
+    pub fn emit_set_local(&mut self, idx: u8) -> &mut Self {
+        match idx {
+            0 => self.body.push(SET_LOCAL_0),
+            1 => self.body.push(SET_LOCAL_1),
+            2 => self.body.push(SET_LOCAL_2),
+            3 => self.body.push(SET_LOCAL_3),
+            _ => {
+                self.body.push(SET_LOCAL);
+                self.body.push(idx);
+            }
+        }
+        self
+    }
+
+    /// Emit `GET_LOCAL idx` (pushes local slot `idx`). Uses the single-byte
+    /// fast paths `GET_LOCAL_0..3` when possible.
+    pub fn emit_get_local(&mut self, idx: u8) -> &mut Self {
+        match idx {
+            0 => self.body.push(GET_LOCAL_0),
+            1 => self.body.push(GET_LOCAL_1),
+            2 => self.body.push(GET_LOCAL_2),
+            3 => self.body.push(GET_LOCAL_3),
+            _ => {
+                self.body.push(GET_LOCAL);
+                self.body.push(idx);
+            }
+        }
+        self
+    }
+
+    /// Emit an unconditional `JUMP target_u16` to an already-known absolute IP.
+    /// Used for backward edges (loops) where the target precedes the jump.
+    pub fn emit_jump_to(&mut self, absolute_target: u16) -> &mut Self {
+        self.body.push(JUMP);
+        self.body.extend_from_slice(&absolute_target.to_le_bytes());
+        self
+    }
+
+    // ------------------------------------------------------------------------
     // Control flow — JUMP, JUMP_IF, JUMP_IF_NOT (2-byte LE target)
     // ------------------------------------------------------------------------
 
