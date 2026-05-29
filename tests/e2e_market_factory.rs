@@ -153,7 +153,7 @@ fn run_isolated_genesis(linked: &[u8], base: u8, deposit_a: u64, deposit_b: u64)
 }
 
 #[test]
-fn two_markets_under_one_futarchy_are_isolated_and_rent_free() {
+fn two_independent_genesis_markets_are_isolated_and_rent_free() {
     let linked = linked_meta();
 
     // Market A: pool of 10. Market B: pool of 30. Disjoint account tags.

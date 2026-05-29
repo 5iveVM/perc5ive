@@ -78,9 +78,9 @@ The point is that the judge never has to leave their conversation with the assis
 ## Implementation status
 
 * **MCP infrastructure**: hand-rolled stdio JSON-RPC 2.0 server in `src/bin/server.rs` (~200 LOC, no SDK dep). `initialize`, `tools/list`, `tools/call` all live.
-* **Tool registrations**: full 23-tool catalogue surfaces via `tools/list` (4 read-only, 3 Percolator-primitive, 9 simulation, 7 devnet-write).
-* **Wired handlers**: `list_perc5ive_markets` returns the four live devnet program IDs (perc5ive engine + sov + pyth_race + lp_perp; see `../DEVNET.md`). Nine simulation tools compute real answers (below); devnet read/write tools respond with a structured envelope pending the embedded RPC + signer path.
-* **Simulation backend**: the risk-engine `simulate_*` / `project_pnl` / `explain_risk_math` tools run the perc5ive bytecode references; the percolator-meta genesis tools — `simulate_genesis_vote`, `simulate_kickstart_split`, `project_coin_distribution`, `explain_futarchy_lifecycle` — compute against `perc5ive::bytecode::meta_math`, the same references the genesis handler bytecode conforms against. Zero on-chain cost, fully deterministic.
+* **Tool registrations**: full 24-tool catalogue surfaces via `tools/list` (8 read-only, 3 Percolator-primitive, 10 simulation, 3 devnet-write).
+* **Wired handlers**: `list_perc5ive_markets` returns the four live devnet program IDs (perc5ive engine + sov + pyth_race + lp_perp; see `../DEVNET.md`). Ten simulation tools compute real answers (below); devnet read/write tools respond with a structured envelope pending the embedded RPC + signer path.
+* **Simulation backend**: the risk-engine `simulate_*` / `project_pnl` / `explain_risk_math` tools run the perc5ive bytecode references; the percolator-meta genesis tools — `simulate_genesis_vote`, `simulate_kickstart_split`, `project_coin_distribution`, `explain_futarchy_lifecycle`, `simulate_rent_audit` — compute against `perc5ive::bytecode::meta_math`, the same references the genesis handler bytecode conforms against. Zero on-chain cost, fully deterministic.
 * **Deploy tools**: `deploy_*` tools will wrap `scripts/deploy.sh` + `five execute`; credentials are devnet-only and gated by a session-level auth token. Pending wire-up.
 
 ## Running it

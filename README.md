@@ -19,8 +19,8 @@ Submitted to **Colosseum Frontier 2026**.
 | `dsl/src/main.v` — Percolator in 5ive DSL | full handler signatures; sentinel stubs wired to bytecode bodies | — |
 | `meta/src/main.v` + `src/bytecode/meta_handlers.rs` — **MetaGenesis** | percolator-meta fair-launch layer ported to 5ive: 12 genesis-lifecycle handlers (deposit→kickstart→vote→mint→finalize→withdraw) executing end-to-end against the real linked binary | 8 e2e/unit |
 | `markets/{sov,pyth_race,lp_perp}/src/main.v` | 3 thin DSL wrappers; Sov fair-launches through MetaGenesis (`tests/e2e_sov_genesis.rs`) | 1 e2e |
-| `bench/` — PercolatorBench conformance harness | meta vote-weight bytecode-vs-reference + split/quorum/recovery conformance (pre-mono u256 suite quarantined for the v16 rebase) | — |
-| `mcp/` — MCP-Perc5ive stdio server | 23 tool catalogue; **9 simulation tools wired** incl. genesis/futarchy (vote weight, kickstart split, COIN distribution, lifecycle) | 18 |
+| `bench/` — PercolatorBench conformance harness | meta vote-weight bytecode-vs-reference + split/quorum/recovery/rent-zero-extraction conformance; 5 properties total (pre-mono u256 suite quarantined for the v16 rebase) | — |
+| `mcp/` — MCP-Perc5ive stdio server | 24 tool catalogue; **10 simulation tools wired** incl. genesis/futarchy (vote weight, kickstart split, COIN distribution, lifecycle, rent audit) | 18 |
 
 **The percolator-meta genesis lifecycle runs end-to-end against the real linked binary** (`tests/e2e_meta_genesis.rs`), and Sov fair-launches through it (`tests/e2e_sov_genesis.rs`). The 9 risk-engine handlers ship at Full scope **against v12.17** — every spec-level guard (OI bounds, fee cap, dust protection, free-collateral check, flat-position fee sweep, time monotonicity) enforced in bytecode via the body-relative JUMP infrastructure.
 
@@ -37,7 +37,7 @@ Perc5ive does that translation once, on 5ive, and ships the artifacts every down
 - **The port itself** — u256 / i256 / i128 math plus the instruction state machine, bit-for-bit conformance against the upstream Rust.
 - **Three reference markets** — Sov (an inverted memecoin perp matching Anatoly's April 2026 sketch), PythRaceMarket (head-to-head price race on Pyth feeds), LPPerp (AMM-LP hedge instrument).
 - **PercolatorBench** — an open-source conformance suite. Run it against Anatoly's reference, against our port, against any future Percolator-derivative. Divergence = bug.
-- **MCP-Perc5ive** — 19 tools exposing on-chain state and a simulation surface to any AI assistant that speaks MCP (Claude, Cursor, Anthropic Console, etc.). Ask *"simulate a 50% BONK drop on Sov"* and watch the cascade in your terminal.
+- **MCP-Perc5ive** — 24 tools exposing on-chain state and a simulation surface to any AI assistant that speaks MCP (Claude, Cursor, Anthropic Console, etc.). Ask *"simulate a 50% BONK drop on Sov"* and watch the cascade in your terminal.
 
 ## Repository layout
 

@@ -140,8 +140,8 @@ Mirrors the shape/registration of the existing four tools.
 
 Add a `rent_zero_extraction` property to the `ConformanceReport` that runs the
 conservation checks over a probe set, so `PercolatorBench` shows it green
-alongside the existing four meta properties (vote weight, kickstart split,
-quorum, recovery). Add a unit test mirroring `meta_conformance_run_is_all_green`.
+alongside the existing five meta properties (vote weight, kickstart split,
+quorum, recovery, rent). Add a unit test mirroring `meta_conformance_run_is_all_green`.
 
 ### Data flow
 
