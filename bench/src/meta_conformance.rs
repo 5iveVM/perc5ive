@@ -17,7 +17,7 @@ use five_protocol::types;
 use five_vm_mito::{MitoVM, StackStorage, Value};
 use perc5ive::bytecode::meta_math::{
     distribution_approved, genesis_recoverable_principal, genesis_vote_weight, kickstart_split,
-    program_genesis_vote_weight,
+    program_genesis_vote_weight, rent_breakdown,
 };
 
 /// Run `program_genesis_vote_weight` on the real VM for `(staked, age)`.
@@ -128,6 +128,30 @@ pub fn run() -> ConformanceReport {
         r.record_fail("recoverable_principal_solvent_and_lossy", "recovery mismatch");
     }
 
+    // --- rent: the genesis lifecycle has no operator sink; conservation holds ---
+    let mut rent_ok = true;
+    let mut rseed: u64 = 0x5EED_5EED_5EED_5EED;
+    let mut rnext = || {
+        rseed = rseed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        rseed
+    };
+    for _ in 0..600 {
+        let deposits = [rnext() % 1_000_000, rnext() % 1_000_000, rnext() % 1_000_000];
+        let total: u64 = deposits.iter().sum();
+        let vault = rnext() % (2 * total.max(1));
+        let b = rent_breakdown(&deposits, vault);
+        let conserves = b.returned_to_users + b.held_in_protocol == b.total_in;
+        let no_mint = b.returned_to_users <= b.total_in;
+        if !(b.operator_rent == 0 && conserves && no_mint && b.total_in == total) {
+            rent_ok = false;
+        }
+    }
+    if rent_ok {
+        r.record_pass("rent_zero_extraction_and_conservation");
+    } else {
+        r.record_fail("rent_zero_extraction_and_conservation", "operator rent != 0 or pool not conserved");
+    }
+
     r
 }
 
@@ -144,7 +168,7 @@ mod tests {
             report.failed,
             report.summary()
         );
-        // 4 properties: vote-weight (bytecode), split, quorum, recovery.
-        assert_eq!(report.total(), 4, "{}", report.summary());
+        // 5 properties: vote-weight (bytecode), split, quorum, recovery, rent.
+        assert_eq!(report.total(), 5, "{}", report.summary());
     }
 }
