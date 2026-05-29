@@ -112,6 +112,47 @@ impl Program {
         self.push_u128(value as u128)
     }
 
+    /// Emit a **pool-free** push of a small constant via the nibble opcodes
+    /// `PUSH_0..PUSH_3` (0xD8-0xDB), which push `U64(0..=3)` directly.
+    ///
+    /// In a binary with `FEATURE_CONSTANT_POOL` set (everything the
+    /// five-dsl-compiler emits), the regular `PUSH_U64`/`PUSH_U128` opcodes read
+    /// their operand as a *pool index*, not an inline literal — so hand-written
+    /// bodies appended into such a binary must source constants either from the
+    /// pool or from these nibble pushes. Panics if `value > 3`.
+    pub fn emit_push_nibble(&mut self, value: u64) -> &mut Self {
+        let op = match value {
+            0 => PUSH_0,
+            1 => PUSH_1,
+            2 => PUSH_2,
+            3 => PUSH_3,
+            _ => panic!("emit_push_nibble: {value} > 3 — use emit_push_uint"),
+        };
+        self.body.push(op);
+        self
+    }
+
+    /// Emit a **pool-free** push of an arbitrary `u64` by composing nibble
+    /// pushes with `ADD` (`3 + 3 + … + r`). Single opcode for `value <= 3`;
+    /// otherwise `PUSH_3` then `(PUSH_d; ADD)` chunks. Intended for the small
+    /// constants hand-written bodies need (status codes, divisors) when the
+    /// binary's constant pool makes `PUSH_U64` a pool-index opcode. The pushed
+    /// value is a `U64` on top of the stack.
+    pub fn emit_push_uint(&mut self, value: u64) -> &mut Self {
+        if value <= 3 {
+            return self.emit_push_nibble(value);
+        }
+        self.emit_push_nibble(3);
+        let mut rem = value - 3;
+        while rem > 0 {
+            let d = rem.min(3);
+            self.emit_push_nibble(d);
+            self.body.push(ADD);
+            rem -= d;
+        }
+        self
+    }
+
     /// Emit `PUSH_BOOL(value)`.
     pub fn push_bool(&mut self, value: bool) -> &mut Self {
         self.body.push(PUSH_BOOL);
@@ -360,6 +401,20 @@ impl Program {
         self.body.push(JUMP);
         let patch_at = self.body.len();
         self.body.extend_from_slice(&[0, 0]);
+        BodyRelativeJumpPatch { patch_at }
+    }
+
+    /// Emit an unconditional backward `JUMP` to an already-emitted point in the
+    /// body, expressed as a **body-relative** offset (use [`Self::body_len`] to
+    /// capture the loop-start offset before the loop). The returned patch must
+    /// be passed to the linker alongside the other body-relative patches so the
+    /// stored target is biased by the body's final append offset. Used for the
+    /// genesis vote-weight `log2` loop inside an appended handler body, where
+    /// absolute targets aren't known until link time.
+    pub fn emit_jump_backward_body_relative(&mut self, body_target: u16) -> BodyRelativeJumpPatch {
+        self.body.push(JUMP);
+        let patch_at = self.body.len();
+        self.body.extend_from_slice(&body_target.to_le_bytes());
         BodyRelativeJumpPatch { patch_at }
     }
 

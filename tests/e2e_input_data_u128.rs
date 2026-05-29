@@ -1,14 +1,15 @@
 //! Round-trip a u128 value through `MitoVM::execute_direct`'s typed-param
 //! `input_data` pathway. Regression test for the U128 typed-param branch
-//! added in five-vm-mito PR #86.
+//! in mono's `ExecutionContext::parse_parameters`.
 //!
-//! Without that PR's change, the typed-param parser only recognised
-//! U8 / U32 / U64 / BOOL / STRING — a `type_id == 14 (U128)` byte fell
-//! through to the catch-all and returned `TypeMismatch`. That was the
-//! single biggest blocker for the Phase 2 runtime e2e: every Percolator
-//! handler signature has at least one `u128` parameter (amount, oracle
-//! price scaled, basis), and there was no way to drive them via the
-//! public `execute_direct` entry point without per-test shim binaries.
+//! Without that branch, `parse_parameters` recognised only
+//! U8/U16/U32/I8/I16/I32/U64/BOOL/STRING/PUBKEY/ACCOUNT — a
+//! `type_id == 14 (U128)` byte fell through to the catch-all and returned
+//! `TypeMismatch`. That was the single biggest blocker for the Phase 2
+//! runtime e2e: every Percolator handler signature has at least one `u128`
+//! parameter (amount, oracle price scaled, basis), and there was no way to
+//! drive them via the public `execute_direct` entry point without per-test
+//! shim binaries.
 //!
 //! This test confirms a u128 value walked into the param table is the
 //! same value that comes out via `LOAD_PARAM` + `RETURN_VALUE`.
@@ -16,20 +17,6 @@
 use five_protocol::opcodes::{LOAD_PARAM_1, RETURN_VALUE};
 use five_protocol::types;
 use five_vm_mito::{MitoVM, Value};
-
-const TYPED_PARAM_SENTINEL: u32 = 128;
-
-fn write_vle(out: &mut Vec<u8>, mut value: u32) {
-    loop {
-        let b = (value & 0x7F) as u8;
-        value >>= 7;
-        if value == 0 {
-            out.push(b);
-            return;
-        }
-        out.push(b | 0x80);
-    }
-}
 
 /// Build the smallest valid VM-native script with a single function whose
 /// body is `LOAD_PARAM_1 ; RETURN_VALUE`. The returned bytecode is what the
@@ -46,14 +33,16 @@ fn one_function_script_loading_param_1() -> Vec<u8> {
     s
 }
 
-/// Encode the typed-param `input_data` envelope for a single u128 argument:
-///   [func_idx VLE] [TYPED_PARAM_SENTINEL=128 VLE] [typed_count=1 VLE]
-///   [type_id=U128] [16 bytes u128 LE]
+/// Encode the mono typed-param `input_data` envelope for a single u128 argument:
+///   [func_idx u32 LE] [param_count=1 u32 LE] [type_id=U128] [16 bytes u128 LE]
+///
+/// Mono replaced the old VLE+sentinel envelope (five-vm-mito PR #86) with a
+/// fixed-width u32-LE header — see `TestUtils::create_function_input` in
+/// five-vm-mito and `ExecutionContext::parse_parameters`.
 fn typed_input_data_u128(func_idx: u32, value: u128) -> Vec<u8> {
     let mut input = Vec::new();
-    write_vle(&mut input, func_idx);
-    write_vle(&mut input, TYPED_PARAM_SENTINEL);
-    write_vle(&mut input, 1);
+    input.extend_from_slice(&func_idx.to_le_bytes());
+    input.extend_from_slice(&1u32.to_le_bytes());
     input.push(types::U128);
     input.extend_from_slice(&value.to_le_bytes());
     input
@@ -97,9 +86,8 @@ fn typed_u128_truncated_input_data_returns_error() {
     // gracefully (InvalidInstructionPointer), never panic / overrun.
     let bytecode = one_function_script_loading_param_1();
     let mut input = Vec::new();
-    write_vle(&mut input, 0);
-    write_vle(&mut input, TYPED_PARAM_SENTINEL);
-    write_vle(&mut input, 1);
+    input.extend_from_slice(&0u32.to_le_bytes()); // func_idx
+    input.extend_from_slice(&1u32.to_le_bytes()); // param_count = 1
     input.push(types::U128);
     // Only 8 bytes of "value" — should be rejected by the bounds check.
     input.extend_from_slice(&[0xAA; 8]);

@@ -30,7 +30,11 @@ five-vm-mito = { path = "../five-mono/five-vm-mito" }
 five-dsl-compiler = { path = "../five-mono/five-dsl-compiler" }
 
 [dev-dependencies]
-# Version-pinned to match five-vm-mito's dep so the test account-info shim
-# (tests/common/mod.rs) mirrors the exact internal Account layout. Bump in
-# lockstep with mito.
-pinocchio = "=0.9.2"
+# MUST be the SAME crate instance five-vm-mito links, not crates.io 0.9.2 —
+# `MitoVM::execute_direct` takes `&[five_vm_mito::AccountInfo]`, which is this
+# vendored pinocchio's `AccountInfo`. A crates.io copy of the same version is a
+# distinct type that fails to unify (the runtime-account test path can't compile
+# against it). Points at five-mono's vendored copy so `tests/common/mod.rs` can
+# build accounts the VM actually accepts, via pinocchio's public test
+# constructor `AccountInfo::new`.
+pinocchio = { path = "../five-mono/third_party/pinocchio" }

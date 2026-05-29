@@ -32,27 +32,30 @@ support_yes() -> u8     { return 1; }
 support_retract() -> u8 { return 2; }
 
 // =============================================================================
-// Sentinel constants for handler-body rewriting (match
-// src/bytecode/meta_handlers.rs SENTINEL_* — values 0xFEEDFACEDEAD_60xx).
+// Sentinel-rewrite convention.
+//
+// Each handler body is a single `return <sentinel-literal>;` — the
+// five-dsl-compiler lowers that to `PUSH_U64 <pooled const>; RETURN_VALUE`,
+// the canonical stub the perc5ive linker scans for and rewrites in place to a
+// `JUMP` into the matching hand-written body (src/bytecode/meta_handlers.rs).
+//
+// The literal is inlined directly (NOT routed through a `sentinel_x()` helper
+// function): a helper would compile to a separate param-less CALL frame, and
+// the rewritten body would then run without the handler's parameters/accounts.
+// Inlining keeps the stub *inside* the handler's own entry frame, so
+// `LOAD_PARAM` / `LOAD_FIELD` in the appended body see the real arguments.
+//
+// Literals match src/bytecode/meta_handlers.rs SENTINEL_* (0xFEEDFACEDEAD_60xx):
+//   init_coin_config        18369614221520232451   activate_live           18369614221520232459
+//   init_genesis_bootstrap  18369614221520232469   genesis_deposit         18369614221520232470
+//   genesis_withdraw        18369614221520232471   kickstart_genesis_market 18369614221520232475
+//   init_genesis_distribution 18369614221520232477 vote_genesis_distribution 18369614221520232478
+//   genesis_mint_reward     18369614221520232472   finalize_genesis        18369614221520232473
+//   draw_genesis_surplus    18369614221520232474   recover_genesis_market  18369614221520232476
+//   mint_reward             18369614221520232456   transfer_mint_authority 18369614221520232458
+//   init_percolator_market  18369614221520232467   percolator_admin        18369614221520232468
+//   approve_builder         18369614221520232479
 // =============================================================================
-
-sentinel_init_coin_config()        -> u64 { return 18369614221520232451; }
-sentinel_mint_reward()             -> u64 { return 18369614221520232456; }
-sentinel_transfer_mint_authority() -> u64 { return 18369614221520232458; }
-sentinel_activate_live()           -> u64 { return 18369614221520232459; }
-sentinel_init_percolator_market()  -> u64 { return 18369614221520232467; }
-sentinel_percolator_admin()        -> u64 { return 18369614221520232468; }
-sentinel_init_genesis_bootstrap()  -> u64 { return 18369614221520232469; }
-sentinel_genesis_deposit()         -> u64 { return 18369614221520232470; }
-sentinel_genesis_withdraw()        -> u64 { return 18369614221520232471; }
-sentinel_genesis_mint_reward()     -> u64 { return 18369614221520232472; }
-sentinel_finalize_genesis()        -> u64 { return 18369614221520232473; }
-sentinel_draw_genesis_surplus()    -> u64 { return 18369614221520232474; }
-sentinel_kickstart_genesis_market()-> u64 { return 18369614221520232475; }
-sentinel_recover_genesis_market()  -> u64 { return 18369614221520232476; }
-sentinel_init_genesis_distribution()->u64 { return 18369614221520232477; }
-sentinel_vote_genesis_distribution()->u64 { return 18369614221520232478; }
-sentinel_approve_builder()         -> u64 { return 18369614221520232479; }
 
 // =============================================================================
 // Account types (5ive-native packed layout — no alignment padding, no 8-byte
@@ -60,16 +63,19 @@ sentinel_approve_builder()         -> u64 { return 18369614221520232479; }
 // Offsets mirror src/bytecode/meta_handlers.rs.
 // =============================================================================
 
-// CoinConfig — shared across all markets using the same COIN mint. Size 57.
+// CoinConfig — shared across all markets using the same COIN mint. Size 64.
+// Lifecycle flags are u64 (not u8): the hand-written bodies run in a
+// pool-enabled binary where the only pool-free constant push is a 0..3 nibble,
+// so flags must be full words to read/store without a pool constant.
 account CoinConfig {
     authority: pubkey;             // @0
     bootstrap_start_slot: u64;     // @32
     bootstrap_delay_slots: u64;    // @40
     live_slot: u64;                // @48
-    phase: u8;                     // @56
+    phase: u64;                    // @56 (0=bootstrap, 1=live)
 }
 
-// GenesisConfig — bootstrap vote + principal ledger. Size 130.
+// GenesisConfig — bootstrap vote + principal ledger. Size 144.
 account GenesisConfig {
     coin_mint: pubkey;             // @0
     base_mint: pubkey;             // @32
@@ -78,8 +84,8 @@ account GenesisConfig {
     total_withdrawn: u64;          // @104
     reward_supply: u64;            // @112
     minted_supply: u64;            // @120
-    finalized: u8;                 // @128
-    kicked: u8;                    // @129
+    finalized: u64;                // @128 (0/1)
+    kicked: u64;                   // @136 (0/1)
 }
 
 // GenesisPosition — per-user base-unit deposit + voting weight. Size 64.
@@ -91,7 +97,7 @@ account GenesisPosition {
     active_votes: u64;             // @56 (live ballots; must be 0 to exit while voting)
 }
 
-// GenesisDistribution — a vote-approved mint allocation item. Size 105.
+// GenesisDistribution — a vote-approved mint allocation item. Size 112.
 account GenesisDistribution {
     genesis_cfg: pubkey;           // @0
     destination: pubkey;           // @32
@@ -99,18 +105,18 @@ account GenesisDistribution {
     amount: u64;                   // @72
     yes_votes: u64;                // @80
     no_votes: u64;                 // @88
-    executed: u8;                  // @96
-    voted_principal: u64;          // @97
+    executed: u64;                 // @96 (0/1)
+    voted_principal: u64;          // @104
 }
 
-// GenesisDistributionVote — one voter's weight on one item. Size 82.
+// GenesisDistributionVote — one voter's weight on one item. Size 96.
 account GenesisDistributionVote {
     proposal: pubkey;              // @0
     voter: pubkey;                 // @32
     weight: u64;                   // @64
-    support: u8;                   // @72
-    retracted: u8;                 // @73
-    principal: u64;                // @74
+    support: u64;                  // @72 (0=no, 1=yes)
+    retracted: u64;                // @80 (1 once backed out of the tally)
+    principal: u64;                // @88
 }
 
 // BuilderApproval — governed builder-code registry entry. Size 137.
@@ -139,7 +145,7 @@ pub init_coin_config(
     bootstrap_delay_slots: u64,
     start_slot: u64
 ) -> u64 {
-    return sentinel_init_coin_config();
+    return 18369614221520232451;
 }
 
 // activate_live — move bootstrap → live once the delay has elapsed.
@@ -148,7 +154,7 @@ pub activate_live(
     authority: account @signer,
     now_slot: u64
 ) -> u64 {
-    return sentinel_activate_live();
+    return 18369614221520232459;
 }
 
 // init_genesis_bootstrap(reward_supply) — create the genesis ledger with a
@@ -158,7 +164,7 @@ pub init_genesis_bootstrap(
     authority: account @signer,
     reward_supply: u64
 ) -> u64 {
-    return sentinel_init_genesis_bootstrap();
+    return 18369614221520232469;
 }
 
 // genesis_deposit(amount) — Sybil-bond deposit; one vote unit per base unit;
@@ -170,7 +176,7 @@ pub genesis_deposit(
     amount: u64,
     now_slot: u64
 ) -> u64 {
-    return sentinel_genesis_deposit();
+    return 18369614221520232470;
 }
 
 // genesis_withdraw(insurance_pull, backing_pull, vault_balance) — exit any
@@ -184,7 +190,7 @@ pub genesis_withdraw(
     recovered: u64,
     vault_balance: u64
 ) -> u64 {
-    return sentinel_genesis_withdraw();
+    return 18369614221520232471;
 }
 
 // kickstart_genesis_market(backing_domain, expiry) — deploy the pooled base
@@ -196,7 +202,7 @@ pub kickstart_genesis_market(
     backing_domain: u64,
     backing_expiry_slot: u64
 ) -> u64 {
-    return sentinel_kickstart_genesis_market();
+    return 18369614221520232475;
 }
 
 // init_genesis_distribution(proposal_id, amount) — create an allocation item.
@@ -207,7 +213,7 @@ pub init_genesis_distribution(
     proposal_id: u64,
     amount: u64
 ) -> u64 {
-    return sentinel_init_genesis_distribution();
+    return 18369614221520232477;
 }
 
 // vote_genesis_distribution(action) — action 0=no, 1=yes, 2=retract. Weighted
@@ -221,7 +227,7 @@ pub vote_genesis_distribution(
     action: u64,
     now_slot: u64
 ) -> u64 {
-    return sentinel_vote_genesis_distribution();
+    return 18369614221520232478;
 }
 
 // genesis_mint_reward(amount) — mint a majority-approved + quorum-cleared item;
@@ -232,7 +238,7 @@ pub genesis_mint_reward(
     authority: account @signer,
     amount: u64
 ) -> u64 {
-    return sentinel_genesis_mint_reward();
+    return 18369614221520232472;
 }
 
 // finalize_genesis — complete genesis: requires a kicked market and full
@@ -241,7 +247,7 @@ pub finalize_genesis(
     genesis_cfg: GenesisConfig @mut,
     authority: account @signer
 ) -> u64 {
-    return sentinel_finalize_genesis();
+    return 18369614221520232473;
 }
 
 // draw_genesis_surplus(amount, vault_balance) — DAO draws only vault balance
@@ -252,7 +258,7 @@ pub draw_genesis_surplus(
     amount: u64,
     vault_balance: u64
 ) -> u64 {
-    return sentinel_draw_genesis_surplus();
+    return 18369614221520232474;
 }
 
 // recover_genesis_market(kind, domain, amount) — recover bootstrap market funds
@@ -265,7 +271,7 @@ pub recover_genesis_market(
     domain: u64,
     amount: u64
 ) -> u64 {
-    return sentinel_recover_genesis_market();
+    return 18369614221520232476;
 }
 
 // =============================================================================
@@ -279,7 +285,7 @@ pub mint_reward(
     authority: account @signer,
     amount: u64
 ) -> u64 {
-    return sentinel_mint_reward();
+    return 18369614221520232456;
 }
 
 pub transfer_mint_authority(
@@ -287,7 +293,7 @@ pub transfer_mint_authority(
     authority: account @signer,
     new_authority: pubkey
 ) -> u64 {
-    return sentinel_transfer_mint_authority();
+    return 18369614221520232458;
 }
 
 pub init_percolator_market(
@@ -295,7 +301,7 @@ pub init_percolator_market(
     market_admin: account @mut,
     user: account @signer
 ) -> u64 {
-    return sentinel_init_percolator_market();
+    return 18369614221520232467;
 }
 
 pub percolator_admin(
@@ -303,7 +309,7 @@ pub percolator_admin(
     authority: account @signer,
     tag: u64
 ) -> u64 {
-    return sentinel_percolator_admin();
+    return 18369614221520232468;
 }
 
 pub approve_builder(
@@ -311,7 +317,7 @@ pub approve_builder(
     authority: account @signer,
     enabled: u8
 ) -> u64 {
-    return sentinel_approve_builder();
+    return 18369614221520232479;
 }
 
 // =============================================================================
