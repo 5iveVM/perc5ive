@@ -24,7 +24,7 @@ ARTIFACT="${1:-}"
 shift || true
 
 if [[ -z "${ARTIFACT}" ]]; then
-    echo "usage: scripts/deploy.sh <perc5ive|sov|pyth_race|lp_perp> [five deploy flags...]" >&2
+    echo "usage: scripts/deploy.sh <perc5ive|meta|sov|pyth_race|lp_perp> [five deploy flags...]" >&2
     exit 2
 fi
 
@@ -60,6 +60,21 @@ case "${ARTIFACT}" in
         cp "target/perc5ive.linked.bin" "${SHIPPED}"
         TARGET_LOADER="${LOADER_ID}"
         ;;
+    meta)
+        # MetaGenesis (percolator-meta fair-launch layer) — same link-then-ship
+        # pipeline as perc5ive: append the 12 genesis-lifecycle handler bodies
+        # and rewrite their sentinels. The 5 Phase-3 governance sentinels stay
+        # stubbed. Needs the custom loader (shared VM ABI).
+        if [[ ! -f "target/meta.fbin" ]]; then
+            echo "missing target/meta.fbin — running \`cargo build\` to regenerate"
+            cargo build
+        fi
+        echo "→ linking meta (normalize_dsl_header + append 12 genesis bodies + rewrite sentinels)"
+        cargo run --quiet --bin link-meta -- target/meta.fbin target/meta.linked.bin
+        SHIPPED="${REPO_ROOT}/target/meta.bin"
+        cp "target/meta.linked.bin" "${SHIPPED}"
+        TARGET_LOADER="${LOADER_ID}"
+        ;;
     sov|pyth_race|lp_perp)
         SOURCE="${REPO_ROOT}/target/${ARTIFACT}.fbin"
         SHIPPED="${REPO_ROOT}/target/${ARTIFACT}.bin"
@@ -71,7 +86,7 @@ case "${ARTIFACT}" in
         TARGET_LOADER="${STOCK_LOADER_ID}"
         ;;
     *)
-        echo "unknown artifact '${ARTIFACT}' — expected perc5ive, sov, pyth_race, or lp_perp" >&2
+        echo "unknown artifact '${ARTIFACT}' — expected perc5ive, meta, sov, pyth_race, or lp_perp" >&2
         exit 2
         ;;
 esac

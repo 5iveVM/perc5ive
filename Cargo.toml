@@ -17,6 +17,10 @@ path = "src/bin/link_perc5ive.rs"
 name = "normalize-dsl-header"
 path = "src/bin/normalize_dsl_header.rs"
 
+[[bin]]
+name = "link-meta"
+path = "src/bin/link_meta.rs"
+
 [dependencies]
 # Mono-repo path deps. The 5iveVM team consolidated the previously-separate
 # five-protocol / five-vm-mito / five-dsl-compiler repos into

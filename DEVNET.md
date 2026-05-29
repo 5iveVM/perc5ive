@@ -27,6 +27,28 @@ Both loaders share the same VM ABI for the DSL subset, so the markets-vs-engine 
 
 Custom-loader VM state account for the current perc5ive: `87XY3GtjwmAZh1TxDH6UpQvVQUbhxKcaFobzH6Q1Kg6j`. Stock-loader VM state PDA (used by the three markets): `H5ykzUdetT5Lk81GHBe8Netejyw7t1spkN2ZehgRQZpp`.
 
+## MetaGenesis (percolator-meta fair-launch layer)
+
+The genesis-lifecycle program ported from `aeyakovenko/percolator-meta` @ `b6d5f2a`. Same link-then-ship pipeline as the engine: `scripts/deploy.sh meta` runs `link-meta` to append the 12 genesis-lifecycle handler bodies and rewrite their sentinels (the 5 Phase-3 governance sentinels stay stubbed), producing `target/meta.linked.bin`.
+
+| Artifact | Loader | Linked size | Status |
+|---|---|---|---|
+| **meta** (genesis lifecycle: init/bootstrap/deposit/withdraw/kickstart/distribution/vote/mint/finalize/surplus/recover) | Custom `CTSPYe…` | **1867 B** | linked + verified end-to-end locally; **devnet program ID pending** the mono redeploy wave (see note below) |
+
+> **Devnet status (2026-05-28):** the linked `meta.bin` is built and the full deposit→kickstart→vote→mint→finalize→withdraw loop passes against it in `tests/e2e_meta_genesis.rs` (real linked binary, crafted accounts). On-chain submission is pending the same mono-encoding redeploy that the engine + three markets need — the pre-mono program IDs above describe the still-deployed pre-mono builds (the `devnet_reproducibility` size checks for those are `#[ignore]`d until the wave lands). Deploy command once a funded devnet keypair + the mono custom loader are in place:
+>
+> ```
+> cargo build && scripts/deploy.sh meta --target devnet
+> ```
+
+**Genesis-lifecycle verification (offline, no RPC):**
+
+```
+cargo test --test e2e_meta_genesis        # full lifecycle against the linked meta.bin
+cargo test --test e2e_sov_genesis         # Sov fair-launched through genesis (hero demo)
+cargo run --bin link-meta                 # rebuild target/meta.linked.bin from meta.fbin
+```
+
 ## End-to-end verification
 
 ```

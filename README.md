@@ -17,9 +17,10 @@ Submitted to **Colosseum Frontier 2026**.
 | `tests/devnet_reproducibility.rs` — cold-clone verification | artifact sizes match DEVNET.md advertised sizes | 5 e2e |
 | `build.rs` — DSL build step | compiles `dsl/src/main.v` + three market binaries on every build | — |
 | `dsl/src/main.v` — Percolator in 5ive DSL | full handler signatures; sentinel stubs wired to bytecode bodies | — |
-| `markets/{sov,pyth_race,lp_perp}/src/main.v` | 3 thin DSL wrappers | — |
-| `bench/` — PercolatorBench conformance harness | Anatoly-direct conformance: u8² / i8² enumeration vs. hello_slab/percolator, plus our own probe suite | 24 |
-| `mcp/` — MCP-Perc5ive stdio server | 19 tool catalogue; **5 simulation tools wired** (liquidation, trade, crank, pnl projection, risk-math walkthrough) | 13 |
+| `meta/src/main.v` + `src/bytecode/meta_handlers.rs` — **MetaGenesis** | percolator-meta fair-launch layer ported to 5ive: 12 genesis-lifecycle handlers (deposit→kickstart→vote→mint→finalize→withdraw) executing end-to-end against the real linked binary | 8 e2e/unit |
+| `markets/{sov,pyth_race,lp_perp}/src/main.v` | 3 thin DSL wrappers; Sov fair-launches through MetaGenesis (`tests/e2e_sov_genesis.rs`) | 1 e2e |
+| `bench/` — PercolatorBench conformance harness | meta vote-weight bytecode-vs-reference + split/quorum/recovery conformance (pre-mono u256 suite quarantined for the v16 rebase) | — |
+| `mcp/` — MCP-Perc5ive stdio server | 23 tool catalogue; **9 simulation tools wired** incl. genesis/futarchy (vote weight, kickstart split, COIN distribution, lifecycle) | 18 |
 
 **191 tests green across 3 crates.** All 9 handlers ship at Full scope — every spec-level guard (OI bounds, fee cap, dust protection, free-collateral check, flat-position fee sweep, time monotonicity) is now enforced in bytecode via the body-relative JUMP infrastructure.
 
