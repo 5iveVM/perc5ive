@@ -84,6 +84,56 @@ pub fn distribution_approved(
     yes_votes > no_votes && voted_principal > outstanding_principal / 2
 }
 
+/// Where every base unit ends up when a genesis market winds down.
+///
+/// The genesis ledger has **no operator/founder destination**: a deposited base
+/// unit is either returned to its depositor (`genesis_withdraw`) or remains held
+/// in the protocol — in the genesis vault or in the isolated Percolator market it
+/// was deployed into at kickstart, both recoverable to depositors via
+/// `recover_genesis_market`. Any shortfall under market loss is absorbed as
+/// in-protocol bad debt, never skimmed. So `operator_rent` is 0 by construction;
+/// a nonzero value would mean a value sink leaked and is a conformance failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RentBreakdown {
+    pub total_in: u64,
+    pub returned_to_users: u64,
+    pub held_in_protocol: u64,
+    pub operator_rent: u64,
+}
+
+/// Wind-down breakdown for `deposits` against the market `vault_balance` at
+/// wind-down. `vault_balance < sum(deposits)` models a market loss; recovery is
+/// the same pro-rata rule the handler uses (`genesis_recoverable_principal`),
+/// with the whole pool as the outstanding principal.
+pub fn rent_breakdown(deposits: &[u64], vault_balance: u64) -> RentBreakdown {
+    let total_in: u64 = deposits.iter().copied().sum();
+    let returned_to_users: u64 = deposits
+        .iter()
+        .map(|&d| genesis_recoverable_principal(d, vault_balance, total_in).unwrap_or(0))
+        .sum();
+    let held_in_protocol = total_in.saturating_sub(returned_to_users);
+    let operator_rent = total_in
+        .saturating_sub(returned_to_users)
+        .saturating_sub(held_in_protocol);
+    RentBreakdown { total_in, returned_to_users, held_in_protocol, operator_rent }
+}
+
+/// Aggregate the rent breakdown across multiple **isolated** markets launched
+/// under one shared futarchy. Markets do not cross-collateralize (Percolator's
+/// per-market isolation), so the aggregate is a plain field-wise sum; operator
+/// rent stays 0 in the aggregate iff it is 0 per market.
+pub fn aggregate_rent(markets: &[RentBreakdown]) -> RentBreakdown {
+    markets.iter().fold(
+        RentBreakdown { total_in: 0, returned_to_users: 0, held_in_protocol: 0, operator_rent: 0 },
+        |acc, m| RentBreakdown {
+            total_in: acc.total_in + m.total_in,
+            returned_to_users: acc.returned_to_users + m.returned_to_users,
+            held_in_protocol: acc.held_in_protocol + m.held_in_protocol,
+            operator_rent: acc.operator_rent + m.operator_rent,
+        },
+    )
+}
+
 // =============================================================================
 // Bytecode — standalone scripts for VM conformance
 // =============================================================================
@@ -196,6 +246,54 @@ mod tests {
         assert_eq!(genesis_recoverable_principal(0, 500, 1_000), Some(0));
         // Corrupt: nonzero claim with zero outstanding.
         assert_eq!(genesis_recoverable_principal(100, 500, 0), None);
+    }
+
+    #[test]
+    fn rent_breakdown_conserves_and_never_extracts() {
+        // Solvent wind-down: vault covers the whole pool → everyone made whole,
+        // nothing held back, zero operator rent.
+        let b = rent_breakdown(&[4, 4, 2], 10);
+        assert_eq!(b.total_in, 10);
+        assert_eq!(b.returned_to_users, 10);
+        assert_eq!(b.held_in_protocol, 0);
+        assert_eq!(b.operator_rent, 0);
+
+        // 50% market loss: vault is half the pool. Users recover pro-rata; the
+        // shortfall stays as in-protocol bad debt, NOT skimmed to an operator.
+        let b = rent_breakdown(&[4, 4, 2], 5);
+        assert_eq!(b.total_in, 10);
+        assert_eq!(b.returned_to_users, 5, "floor(4*5/10)+floor(4*5/10)+floor(2*5/10)");
+        assert_eq!(b.held_in_protocol, 5);
+        assert_eq!(b.operator_rent, 0);
+
+        // Conservation + no-extraction over a probe sweep.
+        let mut seed: u64 = 0xC0FFEE_u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            seed
+        };
+        for _ in 0..500 {
+            let deposits = [next() % 1_000, next() % 1_000, next() % 1_000];
+            let total: u64 = deposits.iter().sum();
+            let vault = next() % (2 * total.max(1));
+            let b = rent_breakdown(&deposits, vault);
+            assert_eq!(b.total_in, total);
+            assert!(b.returned_to_users <= b.total_in, "no base-unit minting");
+            assert_eq!(b.returned_to_users + b.held_in_protocol, b.total_in, "conservation");
+            assert_eq!(b.operator_rent, 0, "genesis ledger has no operator sink");
+        }
+    }
+
+    #[test]
+    fn aggregate_rent_sums_markets_and_stays_zero_extraction() {
+        let a = rent_breakdown(&[6, 4], 10); // solvent → 10 returned, 0 held
+        let b = rent_breakdown(&[5, 5], 5); // 50% loss → floor(5*5/10)=2 each = 4 returned, 6 held
+        let agg = aggregate_rent(&[a, b]);
+        assert_eq!(agg.total_in, 20);
+        assert_eq!(agg.returned_to_users, 10 + 4);
+        assert_eq!(agg.held_in_protocol, 0 + 6);
+        assert_eq!(agg.operator_rent, 0, "aggregate operator rent across markets is 0");
+        assert_eq!(agg.returned_to_users + agg.held_in_protocol, agg.total_in);
     }
 
     #[test]
