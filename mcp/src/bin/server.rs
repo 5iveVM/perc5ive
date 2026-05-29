@@ -19,6 +19,7 @@
 use std::io::{self, BufRead, Write};
 
 use mcp_perc5ive::{catalogue, McpTool};
+use perc5ive::bytecode::meta_math;
 use serde_json::{json, Value};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -112,6 +113,17 @@ fn call_tool(params: Value) -> Result<Value, JsonRpcError> {
         "simulate_crank" => Ok(text_tool_result(handle_simulate_crank(arguments))),
         "project_pnl" => Ok(text_tool_result(handle_project_pnl(arguments))),
         "explain_risk_math" => Ok(text_tool_result(handle_explain_risk_math(arguments))),
+        // --- percolator-meta genesis / futarchy simulations (Phase 6) ---
+        "simulate_genesis_vote" => Ok(text_tool_result(handle_simulate_genesis_vote(arguments))),
+        "simulate_kickstart_split" => {
+            Ok(text_tool_result(handle_simulate_kickstart_split(arguments)))
+        }
+        "project_coin_distribution" => {
+            Ok(text_tool_result(handle_project_coin_distribution(arguments)))
+        }
+        "explain_futarchy_lifecycle" => {
+            Ok(text_tool_result(handle_explain_futarchy_lifecycle(arguments)))
+        }
         "get_risk_engine_state" => Ok(text_tool_result(handle_devnet_read_stub(
             "get_risk_engine_state",
             arguments,
@@ -397,6 +409,153 @@ fn handle_explain_risk_math(args: Value) -> String {
     )
 }
 
+// =============================================================================
+// percolator-meta genesis / futarchy simulations (Phase 6)
+//
+// Each computes its answer from the same Rust references the genesis handler
+// bytecode conforms against (perc5ive::bytecode::meta_math), so the MCP
+// surface and the on-chain bodies can't drift.
+// =============================================================================
+
+fn handle_simulate_genesis_vote(args: Value) -> String {
+    let staked = args.get("staked").and_then(Value::as_u64).unwrap_or(0);
+    let now_slot = args.get("now_slot").and_then(Value::as_u64).unwrap_or(0);
+    let start_slot = args.get("start_slot").and_then(Value::as_u64).unwrap_or(0);
+    let age = now_slot.saturating_sub(start_slot);
+    let weight = meta_math::genesis_vote_weight(staked, age);
+    let log2 = if age < 2 { 0 } else { age.ilog2() };
+    format!(
+        "Genesis vote-weight simulation (meta_math::genesis_vote_weight)\n\
+         \n\
+         staked principal:  {staked}\n\
+         start_slot:        {start_slot}\n\
+         now_slot:          {now_slot}\n\
+         age (slots):       {age}\n\
+         \n\
+         floor(log2(age)):  {log2}\n\
+         vote weight:       {weight}    (= floor(log2(age)) * staked)\n\
+         \n\
+         Weight is 0 when staked == 0 or age < 2 (a same-slot deposit has no\n\
+         pull). Earlier bonders weigh strictly more for equal stake.\n\
+         Source: `perc5ive::bytecode::meta_handlers::handler_body_vote_genesis_distribution`"
+    )
+}
+
+fn handle_simulate_kickstart_split(args: Value) -> String {
+    let total = args
+        .get("total_deposited")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let (insurance, backing) = meta_math::kickstart_split(total);
+    format!(
+        "Kickstart capital split (meta_math::kickstart_split)\n\
+         \n\
+         total_deposited:   {total}\n\
+         \n\
+         insurance = floor(total/2):  {insurance}\n\
+         backing   = total - insurance: {backing}\n\
+         (insurance + backing = {total}, conserved)\n\
+         \n\
+         On kickstart the pooled bond is deployed into the market: `insurance`\n\
+         tops up the insurance fund, `backing` seeds the backing bucket, and the\n\
+         genesis is marked kicked.\n\
+         Source: `perc5ive::bytecode::meta_handlers::handler_body_kickstart_genesis_market`"
+    )
+}
+
+fn handle_project_coin_distribution(args: Value) -> String {
+    let reward_supply = args
+        .get("reward_supply")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let outstanding = args
+        .get("outstanding_principal")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let empty = vec![];
+    let items = args.get("items").and_then(Value::as_array).unwrap_or(&empty);
+
+    let mut out = format!(
+        "COIN distribution projection (meta_math::distribution_approved)\n\
+         \n\
+         reward_supply:          {reward_supply}\n\
+         outstanding_principal:  {outstanding}\n\
+         quorum threshold (> outstanding/2): {}\n\
+         \n\
+         items:\n",
+        outstanding / 2
+    );
+    let mut minted_if_approved: u64 = 0;
+    for (i, item) in items.iter().enumerate() {
+        let amount = item.get("amount").and_then(Value::as_u64).unwrap_or(0);
+        let yes = item.get("yes_votes").and_then(Value::as_u64).unwrap_or(0);
+        let no = item.get("no_votes").and_then(Value::as_u64).unwrap_or(0);
+        let vp = item
+            .get("voted_principal")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let approved = meta_math::distribution_approved(yes, no, vp, outstanding);
+        if approved {
+            minted_if_approved = minted_if_approved.saturating_add(amount);
+        }
+        out.push_str(&format!(
+            "  [{i}] amount={amount} yes={yes} no={no} voted_principal={vp} \
+             -> approved={approved} (majority: {}, quorum: {})\n",
+            yes > no,
+            vp > outstanding / 2,
+        ));
+    }
+    let finalizable = minted_if_approved == reward_supply && reward_supply > 0;
+    out.push_str(&format!(
+        "\n\
+         total minted if all approved items execute: {minted_if_approved}\n\
+         == reward_supply ({reward_supply})? {}\n\
+         finalize_genesis would {}\n\
+         Source: `perc5ive::bytecode::meta_handlers::handler_body_genesis_mint_reward`",
+        minted_if_approved == reward_supply,
+        if finalizable {
+            "SUCCEED (full supply distributed + market kicked)"
+        } else {
+            "FAIL with STATUS_SUPPLY_INCOMPLETE until 100% is distributed"
+        }
+    ));
+    out
+}
+
+fn handle_explain_futarchy_lifecycle(_args: Value) -> String {
+    "percolator-meta genesis → MetaDAO lifecycle (perc5ive port)\n\
+     \n\
+     A fair-launch where depositing is a Sybil bond, not a sale — capital at\n\
+     risk buys time-weighted voting power over a fixed COIN distribution, no\n\
+     yield. Handlers (func idx in meta/src/main.v):\n\
+     \n\
+       0  init_coin_config       COIN mint authority = PDA, freeze authority None;\n\
+                                  zero delay => live now, else awaits activate_live.\n\
+       2  init_genesis_bootstrap  fix reward_supply; open the deposit window.\n\
+       3  genesis_deposit         bond base units; 1 vote unit per base unit;\n\
+                                  start_slot = now (the vote-weight clock).\n\
+       5  kickstart_genesis_market deploy the pool 50/50 (insurance/backing) into\n\
+                                  a PDA-admin Percolator market; mark kicked.\n\
+       4  genesis_withdraw         exit any time, forfeiting the vote; pro-rata\n\
+                                  under loss after finalize.\n\
+       1  activate_live            bootstrap -> live once the delay elapses.\n\
+       6  init_genesis_distribution propose an allocation item (<= reward_supply).\n\
+       7  vote_genesis_distribution weight = floor(log2(age)) * staked; quorum\n\
+                                  counts each voter's principal once.\n\
+       8  genesis_mint_reward      mint a majority-approved (yes>no) + quorum-\n\
+                                  cleared (voted_principal > outstanding/2) item;\n\
+                                  minted_supply <= reward_supply.\n\
+       9  finalize_genesis         requires kicked + minted_supply == reward_supply;\n\
+                                  spends the mint authority — keys pass to the DAO.\n\
+      10  draw_genesis_surplus     DAO draws only vault balance above outstanding\n\
+                                  principal.\n\
+     \n\
+     The winning distribution mints the COIN and becomes the MetaDAO; key\n\
+     handover (Squads v4) is the deferred finish. Use simulate_genesis_vote /\n\
+     simulate_kickstart_split / project_coin_distribution for the numbers."
+        .to_string()
+}
+
 fn handle_devnet_read_stub(tool: &str, arguments: Value) -> String {
     format!(
         "Tool '{tool}' is a devnet-read operation that queries live account\n\
@@ -533,6 +692,58 @@ mod tests {
         });
         let out = handle_simulate_trade(args);
         assert!(out.contains("taker within bounds: false"));
+    }
+
+    #[test]
+    fn simulate_genesis_vote_matches_log2_weight() {
+        // age = 1200 - 1000 = 200; floor(log2(200)) = 7; weight = 7 * 4 = 28.
+        let args = json!({ "staked": 4u64, "now_slot": 1200u64, "start_slot": 1000u64 });
+        let out = handle_simulate_genesis_vote(args);
+        assert!(out.contains("vote weight:       28"), "got: {out}");
+    }
+
+    #[test]
+    fn simulate_kickstart_split_is_50_50_floor() {
+        let args = json!({ "total_deposited": 101u64 });
+        let out = handle_simulate_kickstart_split(args);
+        assert!(out.contains("insurance = floor(total/2):  50"), "got: {out}");
+        assert!(out.contains("backing   = total - insurance: 51"), "got: {out}");
+    }
+
+    #[test]
+    fn project_coin_distribution_flags_full_supply_finalizable() {
+        let args = json!({
+            "reward_supply": 100u64,
+            "outstanding_principal": 8u64,
+            "items": [
+                { "amount": 40u64, "yes_votes": 40u64, "no_votes": 0u64, "voted_principal": 8u64 },
+                { "amount": 60u64, "yes_votes": 40u64, "no_votes": 0u64, "voted_principal": 8u64 },
+            ],
+        });
+        let out = handle_project_coin_distribution(args);
+        assert!(out.contains("total minted if all approved items execute: 100"), "got: {out}");
+        assert!(out.contains("SUCCEED"), "got: {out}");
+    }
+
+    #[test]
+    fn project_coin_distribution_flags_failed_quorum() {
+        // voted_principal 4 is NOT > outstanding/2 = 4 (strict), so not approved.
+        let args = json!({
+            "reward_supply": 100u64,
+            "outstanding_principal": 8u64,
+            "items": [ { "amount": 100u64, "yes_votes": 10u64, "no_votes": 0u64, "voted_principal": 4u64 } ],
+        });
+        let out = handle_project_coin_distribution(args);
+        assert!(out.contains("approved=false"), "got: {out}");
+        assert!(out.contains("FAIL with STATUS_SUPPLY_INCOMPLETE"), "got: {out}");
+    }
+
+    #[test]
+    fn explain_futarchy_lifecycle_lists_the_handlers() {
+        let out = handle_explain_futarchy_lifecycle(json!({}));
+        assert!(out.contains("kickstart_genesis_market"));
+        assert!(out.contains("finalize_genesis"));
+        assert!(out.contains("floor(log2(age)) * staked"));
     }
 
     #[test]

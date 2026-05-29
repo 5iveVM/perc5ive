@@ -141,6 +141,31 @@ pub fn catalogue() -> Vec<McpTool> {
             input_schema: r#"{ "type": "object", "required": ["margin_account", "oracle_price"], "properties": { "margin_account": { "type": "string" }, "oracle_price": { "type": "integer" } } }"#,
             category: ToolCategory::Simulation,
         },
+        // percolator-meta genesis / futarchy simulations
+        McpTool {
+            name: "simulate_genesis_vote",
+            description: "Compute a genesis voter's time-weighted power floor(log2(now_slot - start_slot)) * staked — the vote-weight the bytecode tallies.",
+            input_schema: r#"{ "type": "object", "required": ["staked", "now_slot", "start_slot"], "properties": { "staked": { "type": "integer" }, "now_slot": { "type": "integer" }, "start_slot": { "type": "integer" } } }"#,
+            category: ToolCategory::Simulation,
+        },
+        McpTool {
+            name: "simulate_kickstart_split",
+            description: "Project the 50/50 kickstart split (insurance = floor(total/2), backing = total - insurance) for a pooled genesis deposit.",
+            input_schema: r#"{ "type": "object", "required": ["total_deposited"], "properties": { "total_deposited": { "type": "integer" } } }"#,
+            category: ToolCategory::Simulation,
+        },
+        McpTool {
+            name: "project_coin_distribution",
+            description: "Given reward_supply, outstanding_principal, and proposed allocation items, project which pass the majority+quorum gates and whether finalize would succeed.",
+            input_schema: r#"{ "type": "object", "required": ["reward_supply", "outstanding_principal", "items"], "properties": { "reward_supply": { "type": "integer" }, "outstanding_principal": { "type": "integer" }, "items": { "type": "array", "items": { "type": "object", "properties": { "amount": {"type":"integer"}, "yes_votes": {"type":"integer"}, "no_votes": {"type":"integer"}, "voted_principal": {"type":"integer"} } } } } }"#,
+            category: ToolCategory::Simulation,
+        },
+        McpTool {
+            name: "explain_futarchy_lifecycle",
+            description: "Walk the full genesis → MetaDAO lifecycle (deposit → kickstart → vote → mint → finalize → withdraw) with the perc5ive handler indices and gates.",
+            input_schema: r#"{ "type": "object", "properties": {} }"#,
+            category: ToolCategory::Simulation,
+        },
         // Write (devnet-only)
         McpTool {
             name: "deploy_sov_market",

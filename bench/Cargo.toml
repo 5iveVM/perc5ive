@@ -11,8 +11,10 @@ path = "src/lib.rs"
 [dependencies]
 percolator = { path = "../hello_slab/percolator" }
 perc5ive = { path = ".." }
-five-protocol = { path = "../../five-protocol" }
-five-vm-mito = { path = "../../five-vm-mito" }
+# Mono workspace paths — must match perc5ive's so the lockfile resolves a single
+# five-protocol / five-vm-mito (the pre-mono ../../five-* paths collided).
+five-protocol = { path = "../../five-mono/five-protocol" }
+five-vm-mito = { path = "../../five-mono/five-vm-mito" }
 
 [dev-dependencies]
-pinocchio = "=0.9.2"
+pinocchio = { path = "../../five-mono/third_party/pinocchio" }

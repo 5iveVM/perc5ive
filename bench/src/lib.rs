@@ -42,10 +42,15 @@
 
 #![allow(clippy::unreadable_literal)]
 
-pub mod anatoly_conformance;
-pub mod arithmetic_conformance;
+// Pre-mono conformance modules (anatoly/arithmetic/handler) target the removed
+// `perc5ive::bytecode::{u256,i256,i128}` modules and the 3-arg `execute_direct`.
+// They are quarantined until the Phase-4 v16 rebase rewrites them against the
+// surviving `wide_math` surface — they do not compile against five-mono today.
+// pub mod anatoly_conformance;
+// pub mod arithmetic_conformance;
+// pub mod handler_conformance;
 pub mod field_access_conformance;
-pub mod handler_conformance;
+pub mod meta_conformance;
 
 /// Summary of a conformance run — pass count, fail count, and the list of
 /// failing property names.
