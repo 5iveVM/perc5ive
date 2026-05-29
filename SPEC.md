@@ -2,6 +2,8 @@
 
 This document is a derivative of `aeyakovenko/percolator/spec.md` v12.17.0 (confirmed verbatim via WebFetch 2026-04-15). Use this as the reference when implementing 5ive DSL types and functions that mirror Percolator's risk engine.
 
+> **⚠️ v16 status (2026-05-28):** upstream has since rewritten the engine — `percolator.rs` (v12.17) was replaced by a monolithic `src/v16.rs` (12,376 lines), **171 commits** ahead of our port reference. v16 is a **multi-asset portfolio** model (per-leg settlement, source-credit IM liens, per-domain insurance budgets, bankruptcy residual ledgers) — a re-port, not a tightening. The perc5ive 9-handler port and any "bit-exact conformance" claim are calibrated to **v12.17** (preserved at clone tag `v12.17-port-ref`); the v16 rebase is in progress. The full per-handler delta analysis and VM-level blockers (no checked-arithmetic opcodes, the mono u256/i256 opcode drop, per-leg iteration primitives) are documented in `docs-internal/V16_REBASE_ANALYSIS.md`.
+
 **Canonical source:** `https://github.com/aeyakovenko/percolator/blob/master/spec.md`
 **Verify before building** — re-fetch and diff before any architecture decisions. Anatoly iterates weekly.
 

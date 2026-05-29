@@ -22,7 +22,9 @@ Submitted to **Colosseum Frontier 2026**.
 | `bench/` — PercolatorBench conformance harness | meta vote-weight bytecode-vs-reference + split/quorum/recovery conformance (pre-mono u256 suite quarantined for the v16 rebase) | — |
 | `mcp/` — MCP-Perc5ive stdio server | 23 tool catalogue; **9 simulation tools wired** incl. genesis/futarchy (vote weight, kickstart split, COIN distribution, lifecycle) | 18 |
 
-**191 tests green across 3 crates.** All 9 handlers ship at Full scope — every spec-level guard (OI bounds, fee cap, dust protection, free-collateral check, flat-position fee sweep, time monotonicity) is now enforced in bytecode via the body-relative JUMP infrastructure.
+**The percolator-meta genesis lifecycle runs end-to-end against the real linked binary** (`tests/e2e_meta_genesis.rs`), and Sov fair-launches through it (`tests/e2e_sov_genesis.rs`). The 9 risk-engine handlers ship at Full scope **against v12.17** — every spec-level guard (OI bounds, fee cap, dust protection, free-collateral check, flat-position fee sweep, time monotonicity) enforced in bytecode via the body-relative JUMP infrastructure.
+
+> **v16 conformance:** upstream rewrote the engine into a multi-asset `v16.rs` (171 commits ahead). The risk-handler conformance is calibrated to **v12.17** (tagged `v12.17-port-ref`); the v16 re-port is in progress with the delta analysis + blockers documented internally. See `SPEC.md` for the honest status. The genesis (meta) layer is current to percolator-meta `b6d5f2a`.
 
 **Upstream VM work** (as of 2026-04-17): 7 open PRs extend `five-protocol` + `five-vm-mito` with the opcode set Percolator needs — `u256/i128/i256` arithmetic (#37/#84), sized field access (#38/#85), `input_data` u128 typed params (#86), and **MULDIV_REM_U256** (#39/#87) which surfaces the 512-bit remainder that `wide_signed_mul_div_floor` needs for floor-toward-(-∞) rounding.
 
