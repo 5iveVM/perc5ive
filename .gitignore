@@ -32,3 +32,4 @@ Thumbs.db
 dsl/probe.fbin
 dsl/target/
 target/*.fbin
+.gstack/
