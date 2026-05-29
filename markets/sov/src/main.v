@@ -22,6 +22,36 @@
 //
 //   4. **Insurance fund seeded at init + fee-funded** — routes through
 //      Percolator's existing haircut lane; no Sov-specific socialization.
+//
+// =============================================================================
+// Fair-launch through percolator-meta genesis (Phase 5 — the hero composition)
+// =============================================================================
+//
+// "Admin key burned" is the trust story, but a founder calling burn_admin_key
+// is still a "trust me" promise. percolator-meta genesis turns it into a
+// protocol-enforced property: the SOV market is launched by the genesis
+// lifecycle (see meta/src/main.v + src/bytecode/meta_handlers.rs), not by a
+// privileged init.
+//
+//   1. A `CoinConfig` is created for the SOV COIN (mint authority = a rewards
+//      PDA, freeze authority = None).
+//   2. `init_genesis_bootstrap` fixes the SOV reward supply; the community
+//      `genesis_deposit`s memecoin collateral as a Sybil bond (capital at
+//      risk, not a sale).
+//   3. `kickstart_genesis_market` deploys the pooled bond 50/50 into THIS Sov
+//      inverted-perp market, born under `market_admin = PDA(rewards,
+//      [b"percolator_market_admin", coin_mint])`. The `admin` field below is
+//      that PDA in the genesis path — no human key.
+//   4. The community votes the COIN distribution and `genesis_mint_reward`s
+//      100% of supply to itself; `finalize_genesis` then spends the mint
+//      authority (minted == reward_supply) and hands keys to the MetaDAO.
+//
+// After finalize, no signer can mint SOV, divert custody, or retighten market
+// parameters — `admin_burned` is true *because the genesis protocol made it
+// so*. Proven end-to-end in tests/e2e_sov_genesis.rs against the linked
+// meta.fbin. The permissionless `init_percolator_market` factory variant
+// (caller-funded markets under the same COIN admin) is the Phase-3 governance
+// adapter, deferred until a buyer is validated.
 
 // =============================================================================
 // Accounts
