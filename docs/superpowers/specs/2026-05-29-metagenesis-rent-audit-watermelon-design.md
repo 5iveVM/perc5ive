@@ -34,12 +34,16 @@ DSL (`meta/src/main.v`). The tweet maps onto our build on three axes:
 | "choose to participate vs build their own" | anti-fragmentation / network pull | market-factory framing, `docs-internal/launch/METAGENESIS_THREAD.md` |
 | "you must have minimal rent" | the bootstrap layer extracts ~nothing | `meta/src/main.v:9-13` — *"No yield."* |
 
-Two deliverables, **audit first**:
+Three deliverables, **built in order** (audit first, it earns the others):
 1. **Phase 1 — rent audit.** Prove on the executed bytecode that the genesis
    lifecycle extracts zero rent to any non-protocol key.
-2. **Phase 2 — watermelon pool (sketch).** Turn the per-genesis insurance vault
-   into a mutualized pool shared across factory markets, so one bond earns
-   network-wide exposure. Specified later, on top of the proven rent=0 baseline.
+2. **Phase 2 — shared-futarchy market factory.** Let an established MetaDAO
+   authorize *additional isolated* markets under one shared futarchy, with rents
+   returned to users. Built on the proven rent=0 baseline.
+3. **Phase 3 — launch / positioning.** A Toly-tagged thread positioning Perc5ive
+   publicly as the answer to the RFS, framed as a continuation of the Frontier
+   submission. Posting is **gated** on Phases 1-2 being real and on the honesty
+   bounds below (esp. meta is NOT devnet-live yet).
 
 ---
 
@@ -155,11 +159,10 @@ all three agree by construction.
 
 ---
 
-## Phase 2 — shared-futarchy market factory (sketch, gets its own spec)
+## Phase 2 — shared-futarchy market factory
 
-Forward-looking. Specified only after Phase 1 proves the rent=0 baseline it
-builds on. **Revised after Toly tweet 2** — the earlier "mutualized insurance
-pool" reading is rejected (see below).
+Built on the Phase-1 rent=0 baseline. **Revised after Toly tweet 2** — the
+earlier "mutualized insurance pool" reading is rejected (see below).
 
 ### The turn
 
@@ -195,17 +198,81 @@ under separate PDAs — isolation is preserved by construction.
   market A cannot draw down market B (isolation), and (b) rents from both return
   to users, operator rent stays 0.
 
-### Open questions for the Phase 2 spec
+### Resolved decisions (defaults, confirm at plan review)
 
-1. **What "slice of the watermelon" entitles** — governance weight in the shared
-   futarchy, a share of aggregated rent-return, or both. (Not cross-market risk
-   exposure — that is explicitly rejected above.)
-2. **Builder onboarding** — how a new team gets `approve_builder`'d under an
-   existing MetaDAO, and what the futarchy votes on to admit a market.
-3. **Rent invariant must still hold per market** — Phase 1's proof has to extend
-   to every factory-created market, or a later market quietly reintroduces rent.
+These were open questions; resolved with Toly-tweet-aligned defaults so Phase 2
+is buildable now. Flagged for confirmation during plan review.
+
+1. **What a "slice of the watermelon" entitles** → **governance weight in the
+   shared futarchy + a share of aggregated rent-return.** Not cross-market risk
+   exposure (rejected above — isolation, not mutualization).
+2. **Builder onboarding** → an established MetaDAO admits a new builder via a
+   **futarchy vote** that calls `approve_builder`; the approved builder then
+   calls `init_percolator_market` for its own **isolated** market under the
+   shared COIN. Reuses handlers we already ported (`approve_builder`,
+   `init_percolator_market`, `percolator_admin`).
+3. **Rent invariant per market** → Phase 1's zero-operator-rent proof is extended
+   to *every* factory-created market; the Phase-2 e2e asserts it for a second
+   market, not just the genesis-born one.
+
+### Build surface
+
+- Extend `approve_builder` / `init_percolator_market` so they work post-finalize
+  under an existing MetaDAO (today they fire at/around kickstart for the single
+  genesis market).
+- Rent-return accounting: any per-market fee routes to COIN holders/users; no
+  operator sink (extends `meta_math::rent_breakdown`).
+- New e2e `tests/e2e_market_factory.rs`: one MetaDAO, two isolated markets, prove
+  (a) a fault in market A cannot draw down market B, (b) operator rent stays 0
+  across both.
 
 ---
+
+## Phase 3 — launch / positioning (Toly-tagged RFS-answer thread)
+
+Position Perc5ive publicly as the answer to the RFS, framed as a continuation of
+the Frontier hackathon submission, tagging Toly as a direct answer to today's
+tweets. **Posting is gated** on Phases 1-2 landing and on the honesty bounds.
+
+### Honesty bounds (hard) — what we may and may not claim
+
+| May claim (true) | May NOT claim |
+|---|---|
+| percolator-meta genesis lifecycle ported to 5ive DSL | meta is "live on devnet" (it is not — `DEVNET.md:36`, ID pending mono wave) |
+| conformance: vote-weight bit-exact, kickstart split, quorum, recovery | any market is running real user funds |
+| full lifecycle passes e2e against the **real linked binary** | that we built Percolator / percolator-meta (we built the *implementation*) |
+| **rent audit: operator_rent = 0, proven on the VM** | "formally verified" of *our* code (that is Toly's claim about upstream Percolator) |
+| shared-futarchy factory: 2 isolated markets, rent-return, proven in e2e | devnet-live for the factory |
+
+The engine + 3 markets *do* have devnet IDs (pre-mono, 2026-04-17) and may be
+linked as prior evidence, labeled honestly as pre-mono.
+
+### Thread shape (draft — final copy written after the build, saved to `docs-internal/launch/RFS_ANSWER_THREAD.md`)
+
+Voice per `METAGENESIS_THREAD.md`: technical, concise, Perc5ive = implementation,
+🦞 only emoji, tag Toly once (this is the milestone). Sketch:
+
+1. Quote Toly's RFS tweet. "We've been building this since Frontier — percolator
+   and percolator-meta, ported to the 5ive DSL. Here's where it is."
+2. The fair-launch/genesis lifecycle in 5ive: bond → time-weighted vote → mint →
+   MetaDAO. No yield. (link repo)
+3. "Reduce rents to marginal, return to users" — we measured it: **operator rent
+   = 0**, proven on the executed VM bytecode, exposed as an MCP audit tool.
+4. "Markets under one roof that can't wreck each other" — isolated markets under
+   one shared futarchy; e2e proves a fault in A can't draw down B.
+5. Conformance gift: vote-weight bit-exact vs reference across every log2 bucket;
+   kickstart split / quorum / recovery all green in PercolatorBench.
+6. Honest status: ported + conformance + e2e against the real linked binary;
+   devnet deploy of meta is pending our mono redeploy wave. Engine + 3 markets
+   already on devnet (pre-mono).
+7. Credit: Percolator + percolator-meta are @aeyakovenko's design; @MetaDAOProject
+   for the futarchy. Perc5ive is the 5ive-DSL implementation. Repo: <link>. 🦞
+
+### Process gate
+
+I **draft** the thread; I do **not** post it. Posting is the user's explicit
+action (X posting is outward-facing and irreversible). Best window per
+`TOLY_STRATEGY`: Tue/Wed 9-11am PT.
 
 ## Strategy fit
 
