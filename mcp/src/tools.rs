@@ -166,6 +166,12 @@ pub fn catalogue() -> Vec<McpTool> {
             input_schema: r#"{ "type": "object", "properties": {} }"#,
             category: ToolCategory::Simulation,
         },
+        McpTool {
+            name: "simulate_rent_audit",
+            description: "Audit operator rent across a genesis wind-down: given per-depositor deposits and the market vault balance, return total_in, returned_to_users, held_in_protocol (in-network bad debt under loss), and operator_rent (0 by construction — the genesis ledger has no operator sink). Backs the rent_zero_extraction conformance property.",
+            input_schema: r#"{ "type": "object", "required": ["deposits", "vault_balance"], "properties": { "deposits": { "type": "array", "items": { "type": "integer" } }, "vault_balance": { "type": "integer" } } }"#,
+            category: ToolCategory::Simulation,
+        },
         // Write (devnet-only)
         McpTool {
             name: "deploy_sov_market",
