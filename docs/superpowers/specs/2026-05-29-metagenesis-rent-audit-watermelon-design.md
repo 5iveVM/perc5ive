@@ -215,16 +215,26 @@ is buildable now. Flagged for confirmation during plan review.
    to *every* factory-created market; the Phase-2 e2e asserts it for a second
    market, not just the genesis-born one.
 
-### Build surface
+### Build surface (chosen scope: isolation demo — no new bytecode)
 
-- Extend `approve_builder` / `init_percolator_market` so they work post-finalize
-  under an existing MetaDAO (today they fire at/around kickstart for the single
-  genesis market).
-- Rent-return accounting: any per-market fee routes to COIN holders/users; no
-  operator sink (extends `meta_math::rent_breakdown`).
-- New e2e `tests/e2e_market_factory.rs`: one MetaDAO, two isolated markets, prove
-  (a) a fault in market A cannot draw down market B, (b) operator rent stays 0
-  across both.
+The factory/governance handlers (`approve_builder`, `init_percolator_market`,
+`percolator_admin`, `mint_reward`, `transfer_mint_authority`) are
+`DEFERRED_SENTINELS` (`meta_handlers.rs:200-205`) — ABI-stable stubs with no
+hand-written body. Writing those bodies is deferred to its own spec. Phase 2 here
+proves the watermelon thesis using **only the already-linked genesis handlers**:
+
+- New e2e `tests/e2e_market_factory.rs`: run **two independent genesis
+  lifecycles** against the one linked binary (separate account sets, e.g. tags
+  1-11 and 21-31). Assert (a) **isolation** — market A's mutations never touch
+  market B's accounts and `A.total_deposited != B.total_deposited`; (b)
+  **operator rent = 0** for both, via the same conservation checks as Phase 1.
+- Extend `meta_math::rent_breakdown` to aggregate across markets (sum of
+  per-market breakdowns; operator rent stays 0 in the aggregate).
+
+Deferred (own spec): hand-written bodies for `approve_builder` /
+`init_percolator_market` so a shared MetaDAO can *govern* admission of new
+markets. The isolation demo shows markets are isolated by construction; the
+governance layer that admits them under one futarchy is the next build.
 
 ---
 
